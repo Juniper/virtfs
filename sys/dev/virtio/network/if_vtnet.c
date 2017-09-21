@@ -231,7 +231,13 @@ static void	vtnet_disable_interrupts(struct vtnet_softc *);
 
 static int	vtnet_tunable_int(struct vtnet_softc *, const char *, int);
 
-DEBUGNET_DEFINE(vtnet);
+#ifdef PR_1300428 /* FIXME: Needs rework to adapt to stable_11 changes */
+static void	vtnet_rxq_accum_stats(struct vtnet_rxq *,
+		    struct vtnet_rxq_stats *);
+static void	vtnet_txq_accum_stats(struct vtnet_txq *,
+		    struct vtnet_txq_stats *);
+static void	vtnet_accumulate_stats(struct vtnet_softc *);
+#endif
 
 /* Tunables. */
 static SYSCTL_NODE(_hw, OID_AUTO, vtnet, CTLFLAG_RD, 0, "VNET driver parameters");
@@ -322,6 +328,7 @@ DRIVER_MODULE(vtnet, virtio_pci, vtnet_driver, vtnet_devclass,
     vtnet_modevent, 0);
 MODULE_VERSION(vtnet, 1);
 MODULE_DEPEND(vtnet, virtio, 1, 1, 1);
+MODULE_DEPEND(vtnet, netstack, 1, 1, 1);
 #ifdef DEV_NETMAP
 MODULE_DEPEND(vtnet, netmap, 1, 1, 1);
 #endif /* DEV_NETMAP */
@@ -947,13 +954,16 @@ vtnet_setup_interface(struct vtnet_softc *sc)
 		return (ENOSPC);
 	}
 
-	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
-	ifp->if_baudrate = IF_Gbps(10);	/* Approx. */
-	ifp->if_softc = sc;
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-	ifp->if_init = vtnet_init;
-	ifp->if_ioctl = vtnet_ioctl;
-	ifp->if_get_counter = vtnet_get_counter;
+	if_initname_drv(ifp, device_get_name(dev), device_get_unit(dev));
+#if 0 /* FIXME */
+	if_initbaudrate(ifp, IF_Gbps(10));	/* Approx. */
+#endif
+	if_setsoftc(ifp, sc);
+	if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
+	if_setinitfn(ifp, vtnet_init);
+	if_setioctlfn(ifp, vtnet_ioctl);
+	if_setgetcounterfn(ifp, vtnet_get_counter);
+
 #ifndef VTNET_LEGACY_TX
 	ifp->if_transmit = vtnet_txq_mq_start;
 	ifp->if_qflush = vtnet_qflush;
@@ -968,6 +978,7 @@ vtnet_setup_interface(struct vtnet_softc *sc)
 	ifmedia_init(&sc->vtnet_media, IFM_IMASK, vtnet_ifmedia_upd,
 	    vtnet_ifmedia_sts);
 	ifmedia_add(&sc->vtnet_media, VTNET_MEDIATYPE, 0, NULL);
+	ifmedia_add(&sc->vtnet_media, IFM_ETHER | IFM_AUTO, 0, NULL);
 	ifmedia_set(&sc->vtnet_media, VTNET_MEDIATYPE);
 
 	/* Read (or generate) the MAC address for the adapter. */
@@ -2728,6 +2739,79 @@ vtnet_get_counter(if_t ifp, ift_counter cnt)
 	}
 }
 
+#ifdef PR_1300428 /* FIXME: Needs rework to adapt to stable_11 changes */
+static void
+vtnet_rxq_accum_stats(struct vtnet_rxq *rxq, struct vtnet_rxq_stats *accum)
+{
+	struct vtnet_rxq_stats *st;
+
+	st = &rxq->vtnrx_stats;
+
+	accum->vrxs_ipackets += st->vrxs_ipackets;
+	accum->vrxs_ibytes += st->vrxs_ibytes;
+	accum->vrxs_iqdrops += st->vrxs_iqdrops;
+	accum->vrxs_csum += st->vrxs_csum;
+	accum->vrxs_csum_failed += st->vrxs_csum_failed;
+	accum->vrxs_rescheduled += st->vrxs_rescheduled;
+}
+
+static void
+vtnet_txq_accum_stats(struct vtnet_txq *txq, struct vtnet_txq_stats *accum)
+{
+	struct vtnet_txq_stats *st;
+
+	st = &txq->vtntx_stats;
+
+	accum->vtxs_opackets += st->vtxs_opackets;
+	accum->vtxs_obytes += st->vtxs_obytes;
+	accum->vtxs_csum += st->vtxs_csum;
+	accum->vtxs_tso += st->vtxs_tso;
+	accum->vtxs_rescheduled += st->vtxs_rescheduled;
+}
+
+static void
+vtnet_accumulate_stats(struct vtnet_softc *sc)
+{
+	void *ifp;
+	struct vtnet_statistics *st;
+	struct vtnet_rxq_stats rxaccum;
+	struct vtnet_txq_stats txaccum;
+	int i;
+
+	ifp = sc->vtnet_ifp;
+	st = &sc->vtnet_stats;
+	bzero(&rxaccum, sizeof(struct vtnet_rxq_stats));
+	bzero(&txaccum, sizeof(struct vtnet_txq_stats));
+
+	for (i = 0; i < sc->vtnet_max_vq_pairs; i++) {
+		vtnet_rxq_accum_stats(&sc->vtnet_rxqs[i], &rxaccum);
+		vtnet_txq_accum_stats(&sc->vtnet_txqs[i], &txaccum);
+	}
+
+	st->rx_csum_offloaded = rxaccum.vrxs_csum;
+	st->rx_csum_failed = rxaccum.vrxs_csum_failed;
+	st->rx_task_rescheduled = rxaccum.vrxs_rescheduled;
+	st->tx_csum_offloaded = txaccum.vtxs_csum;
+	st->tx_tso_offloaded = txaccum.vtxs_tso;
+	st->tx_task_rescheduled = txaccum.vtxs_rescheduled;
+
+	/*
+	 * With the exception of if_ierrors, these ifnet statistics are
+	 * only updated in the driver, so just set them to our accumulated
+	 * values. if_ierrors is updated in ether_input() for malformed
+	 * frames that we should have already discarded.
+	 */
+	if_setipackets(ifp, rxaccum.vrxs_ipackets);
+	if_setibytes(ifp, rxaccum.vrxs_ibytes);
+	if_setiqdrops(ifp, rxaccum.vrxs_iqdrops);
+	if_setierrors(ifp, rxaccum.vrxs_ierrors);
+	if_setopackets(ifp, txaccum.vtxs_opackets);
+	if_setobytes(ifp, txaccum.vtxs_obytes);
+#ifndef VTNET_LEGACY_TX
+	if_setomcasts(ifp, txaccum.vtxs_omcasts);
+#endif
+}
+#endif /* PR_1300428 */
 static void
 vtnet_tick(void *xsc)
 {
@@ -2740,12 +2824,15 @@ vtnet_tick(void *xsc)
 	timedout = 0;
 
 	VTNET_CORE_LOCK_ASSERT(sc);
+#ifdef PR_1300428 /* FIXME: Needs rework to adapt to stable_11 changes */
+	vtnet_accumulate_stats(sc);
+#endif /* PR_1300428 */
 
 	for (i = 0; i < sc->vtnet_act_vq_pairs; i++)
 		timedout |= vtnet_watchdog(&sc->vtnet_txqs[i]);
 
 	if (timedout != 0) {
-		ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
+		if_setdrvflagbits(ifp, 0, IFF_DRV_RUNNING);
 		vtnet_init_locked(sc);
 	} else
 		callout_schedule(&sc->vtnet_tick_ch, hz);
@@ -3397,10 +3484,11 @@ vtnet_rx_filter_mac(struct vtnet_softc *sc)
 	    ("%s: CTRL_RX feature not negotiated", __func__));
 
 	/* Unicast MAC addresses: */
-	ucnt = if_foreach_lladdr(ifp, vtnet_copy_ifaddr, sc);
-	promisc = (ucnt > VTNET_MAX_MAC_ENTRIES);
+	if_ucastaddrs_exclude(ifp, (void *)filter->vmf_unicast.macs, &ucnt,
+	    VTNET_MAX_MAC_ENTRIES, sc->vtnet_hwaddr);
 
-	if (promisc) {
+	if (ucnt == VTNET_MAX_MAC_ENTRIES) {
+		promisc = 1;
 		filter->vmf_unicast.nentries = 0;
 		if_printf(ifp, "more than %d MAC addresses assigned, "
 		    "falling back to promiscuous mode\n",
@@ -3409,10 +3497,10 @@ vtnet_rx_filter_mac(struct vtnet_softc *sc)
 		filter->vmf_unicast.nentries = ucnt;
 
 	/* Multicast MAC addresses: */
-	mcnt = if_foreach_llmaddr(ifp, vtnet_copy_maddr, filter);
-	allmulti = (mcnt > VTNET_MAX_MAC_ENTRIES);
-
-	if (allmulti) {
+	if_multiaddr_array(ifp, (void *)filter->vmf_multicast.macs, &mcnt,
+	    VTNET_MAX_MAC_ENTRIES);
+	if (mcnt == VTNET_MAX_MAC_ENTRIES) {
+		allmulti = 1;
 		filter->vmf_multicast.nentries = 0;
 		if_printf(ifp, "more than %d multicast MAC addresses "
 		    "assigned, falling back to all-multicast mode\n",

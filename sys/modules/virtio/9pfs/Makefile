@@ -1,5 +1,5 @@
 #
-# $FreeBSD$
+#  Copyright (c) 2017 Juniper Networks, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -23,6 +23,16 @@
 # SUCH DAMAGE.
 #
 
-SUBDIR=	virtio pci network block balloon scsi random console 9pfs 9pnet
+.include <bsd.own.mk>
+.PATH: ${.CURDIR}/../../../dev/virtio/9pfs
 
-.include <bsd.subdir.mk>
+KMOD    =  virtio_9pfs
+
+# Enumerate Source files for kernel module
+SRCS+=  virtfs_subr.c
+SRCS+=  virtfs_vfops.c
+SRCS+=  virtfs_vnops.c
+SRCS+=  vnode_if.h
+
+# Include kernel module makefile
+.include <bsd.kmod.mk>
