@@ -23,6 +23,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_rss.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -46,6 +48,9 @@ __FBSDID("$FreeBSD$");
 #include <net/if_media.h>
 #include <net/if_vlan_var.h>
 #include <net/iflib.h>
+#ifdef RSS
+#include <net/rss_config.h>
+#endif
 
 #include <netinet/in_systm.h>
 #include <netinet/in.h>
@@ -1140,8 +1145,11 @@ vmxnet3_reinit_rss_shared_data(struct vmxnet3_softc *sc)
 	struct vmxnet3_driver_shared *ds;
 	if_softc_ctx_t scctx;
 	struct vmxnet3_rss_shared *rss;
+#ifdef RSS
+	uint8_t rss_algo;
+#endif
 	int i;
-	
+
 	ds = sc->vmx_ds;
 	scctx = sc->vmx_scctx;
 	rss = sc->vmx_rss;
@@ -1152,10 +1160,29 @@ vmxnet3_reinit_rss_shared_data(struct vmxnet3_softc *sc)
 	rss->hash_func = UPT1_RSS_HASH_FUNC_TOEPLITZ;
 	rss->hash_key_size = UPT1_RSS_MAX_KEY_SIZE;
 	rss->ind_table_size = UPT1_RSS_MAX_IND_TABLE_SIZE;
-	memcpy(rss->hash_key, rss_key, UPT1_RSS_MAX_KEY_SIZE);
-
-	for (i = 0; i < UPT1_RSS_MAX_IND_TABLE_SIZE; i++)
-		rss->ind_table[i] = i % scctx->isc_nrxqsets;
+#ifdef RSS
+	/*
+	 * If the software RSS is configured to anything else other than
+	 * Toeplitz, then just do Toeplitz in "hardware" for the sake of
+	 * the packet distribution, but report the hash as opaque to
+	 * disengage from the software RSS.
+	 */
+	rss_algo = rss_gethashalgo();
+	if (rss_algo == RSS_HASH_TOEPLITZ) {
+		rss_getkey(rss->hash_key);
+		for (i = 0; i < UPT1_RSS_MAX_IND_TABLE_SIZE; i++) {
+			rss->ind_table[i] = rss_get_indirection_to_bucket(i) %
+			    scctx->isc_nrxqsets;
+		}
+		sc->vmx_flags |= VMXNET3_FLAG_SOFT_RSS;
+	} else
+#endif
+	{
+		memcpy(rss->hash_key, rss_key, UPT1_RSS_MAX_KEY_SIZE);
+		for (i = 0; i < UPT1_RSS_MAX_IND_TABLE_SIZE; i++)
+			rss->ind_table[i] = i % scctx->isc_nrxqsets;
+		sc->vmx_flags &= ~VMXNET3_FLAG_SOFT_RSS;
+	}
 }
 
 static void
@@ -1499,29 +1526,50 @@ vmxnet3_isc_rxd_pkt_get(void *vsc, if_rxd_info_t ri)
 	KASSERT(rxcd->sop, ("%s: expected sop", __func__));
 
 	/*
-	 * RSS and flow ID
+	 * RSS and flow ID.
+	 * Types other than M_HASHTYPE_NONE and M_HASHTYPE_OPAQUE_HASH should
+	 * be used only if the software RSS is enabled and it uses the same
+	 * algorithm and the hash key as the "hardware".  If the software RSS
+	 * is not enabled, then it's simply pointless to use those types.
+	 * If it's enabled but with different parameters, then hash values will
+	 * not match.
 	 */
 	ri->iri_flowid = rxcd->rss_hash;
-	switch (rxcd->rss_type) {
-	case VMXNET3_RCD_RSS_TYPE_NONE:
-		ri->iri_flowid = ri->iri_qsidx;
-		ri->iri_rsstype = M_HASHTYPE_NONE;
-		break;
-	case VMXNET3_RCD_RSS_TYPE_IPV4:
-		ri->iri_rsstype = M_HASHTYPE_RSS_IPV4;
-		break;
-	case VMXNET3_RCD_RSS_TYPE_TCPIPV4:
-		ri->iri_rsstype = M_HASHTYPE_RSS_TCP_IPV4;
-		break;
-	case VMXNET3_RCD_RSS_TYPE_IPV6:
-		ri->iri_rsstype = M_HASHTYPE_RSS_IPV6;
-		break;
-	case VMXNET3_RCD_RSS_TYPE_TCPIPV6:
-		ri->iri_rsstype = M_HASHTYPE_RSS_TCP_IPV6;
-		break;
-	default:
-		ri->iri_rsstype = M_HASHTYPE_OPAQUE_HASH;
-		break;
+#ifdef RSS
+	if ((sc->vmx_flags & VMXNET3_FLAG_SOFT_RSS) != 0) {
+		switch (rxcd->rss_type) {
+		case VMXNET3_RCD_RSS_TYPE_NONE:
+			ri->iri_flowid = ri->iri_qsidx;
+			ri->iri_rsstype = M_HASHTYPE_NONE;
+			break;
+		case VMXNET3_RCD_RSS_TYPE_IPV4:
+			ri->iri_rsstype = M_HASHTYPE_RSS_IPV4;
+			break;
+		case VMXNET3_RCD_RSS_TYPE_TCPIPV4:
+			ri->iri_rsstype = M_HASHTYPE_RSS_TCP_IPV4;
+			break;
+		case VMXNET3_RCD_RSS_TYPE_IPV6:
+			ri->iri_rsstype = M_HASHTYPE_RSS_IPV6;
+			break;
+		case VMXNET3_RCD_RSS_TYPE_TCPIPV6:
+			ri->iri_rsstype = M_HASHTYPE_RSS_TCP_IPV6;
+			break;
+		default:
+			ri->iri_rsstype = M_HASHTYPE_OPAQUE_HASH;
+			break;
+		}
+	} else
+#endif
+	{
+		switch (rxcd->rss_type) {
+		case VMXNET3_RCD_RSS_TYPE_NONE:
+			ri->iri_flowid = ri->iri_qsidx;
+			ri->iri_rsstype = M_HASHTYPE_NONE;
+			break;
+		default:
+			ri->iri_rsstype = M_HASHTYPE_OPAQUE_HASH;
+			break;
+		}
 	}
 
 	/* VLAN */
@@ -2120,16 +2168,16 @@ vmxnet3_setup_txq_sysctl(struct vmxnet3_txqueue *txq,
 	txstats = &txq->vxtxq_ts->stats;
 
 	snprintf(namebuf, sizeof(namebuf), "txq%d", txq->vxtxq_id);
-	node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, namebuf, CTLFLAG_RD,
-	    NULL, "Transmit Queue");
+	node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, namebuf,
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Transmit Queue");
 	txq->vxtxq_sysctl = list = SYSCTL_CHILDREN(node);
 
 	/*
 	 * Add statistics reported by the host. These are updated by the
 	 * iflib txq timer on txq 0.
 	 */
-	txsnode = SYSCTL_ADD_NODE(ctx, list, OID_AUTO, "hstats", CTLFLAG_RD,
-	    NULL, "Host Statistics");
+	txsnode = SYSCTL_ADD_NODE(ctx, list, OID_AUTO, "hstats",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Host Statistics");
 	txslist = SYSCTL_CHILDREN(txsnode);
 	SYSCTL_ADD_UQUAD(ctx, txslist, OID_AUTO, "tso_packets", CTLFLAG_RD,
 	    &txstats->TSO_packets, "TSO packets");
@@ -2161,16 +2209,16 @@ vmxnet3_setup_rxq_sysctl(struct vmxnet3_rxqueue *rxq,
 	rxstats = &rxq->vxrxq_rs->stats;
 
 	snprintf(namebuf, sizeof(namebuf), "rxq%d", rxq->vxrxq_id);
-	node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, namebuf, CTLFLAG_RD,
-	    NULL, "Receive Queue");
+	node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, namebuf,
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Receive Queue");
 	rxq->vxrxq_sysctl = list = SYSCTL_CHILDREN(node);
 
 	/*
 	 * Add statistics reported by the host. These are updated by the
 	 * iflib txq timer on txq 0.
 	 */
-	rxsnode = SYSCTL_ADD_NODE(ctx, list, OID_AUTO, "hstats", CTLFLAG_RD,
-	    NULL, "Host Statistics");
+	rxsnode = SYSCTL_ADD_NODE(ctx, list, OID_AUTO, "hstats",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Host Statistics");
 	rxslist = SYSCTL_CHILDREN(rxsnode);
 	SYSCTL_ADD_UQUAD(ctx, rxslist, OID_AUTO, "lro_packets", CTLFLAG_RD,
 	    &rxstats->LRO_packets, "LRO packets");
@@ -2209,7 +2257,7 @@ vmxnet3_setup_debug_sysctl(struct vmxnet3_softc *sc,
 		struct vmxnet3_txqueue *txq = &sc->vmx_txq[i];
 
 		node = SYSCTL_ADD_NODE(ctx, txq->vxtxq_sysctl, OID_AUTO,
-		    "debug", CTLFLAG_RD, NULL, "");
+		    "debug", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 		list = SYSCTL_CHILDREN(node);
 
 		SYSCTL_ADD_UINT(ctx, list, OID_AUTO, "cmd_next", CTLFLAG_RD,
@@ -2230,7 +2278,7 @@ vmxnet3_setup_debug_sysctl(struct vmxnet3_softc *sc,
 		struct vmxnet3_rxqueue *rxq = &sc->vmx_rxq[i];
 
 		node = SYSCTL_ADD_NODE(ctx, rxq->vxrxq_sysctl, OID_AUTO,
-		    "debug", CTLFLAG_RD, NULL, "");
+		    "debug", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "");
 		list = SYSCTL_CHILDREN(node);
 
 		SYSCTL_ADD_UINT(ctx, list, OID_AUTO, "cmd0_ndesc", CTLFLAG_RD,

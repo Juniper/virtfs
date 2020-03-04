@@ -189,9 +189,10 @@ sys_quotactl(struct thread *td, struct quotactl_args *uap)
 	vfs_ref(mp);
 	vput(nd.ni_vp);
 	error = vfs_busy(mp, 0);
-	vfs_rel(mp);
-	if (error != 0)
+	if (error != 0) {
+		vfs_rel(mp);
 		return (error);
+	}
 	error = VFS_QUOTACTL(mp, uap->cmd, uap->uid, uap->arg);
 
 	/*
@@ -208,6 +209,7 @@ sys_quotactl(struct thread *td, struct quotactl_args *uap)
 	if ((uap->cmd >> SUBCMDSHIFT) != Q_QUOTAON &&
 	    (uap->cmd >> SUBCMDSHIFT) != Q_QUOTAOFF)
 		vfs_unbusy(mp);
+	vfs_rel(mp);
 	return (error);
 }
 
@@ -271,7 +273,7 @@ kern_do_statfs(struct thread *td, struct mount *mp, struct statfs *buf)
 	error = VFS_STATFS(mp, buf);
 	if (error != 0)
 		goto out;
-	if (priv_check(td, PRIV_VFS_GENERATION)) {
+	if (priv_check_cred_vfs_generation(td->td_ucred)) {
 		buf->f_fsid.val[0] = buf->f_fsid.val[1] = 0;
 		prison_enforce_statfs(td->td_ucred, mp, buf);
 	}
@@ -486,7 +488,7 @@ restart:
 					continue;
 				}
 			}
-			if (priv_check(td, PRIV_VFS_GENERATION)) {
+			if (priv_check_cred_vfs_generation(td->td_ucred)) {
 				sptmp = malloc(sizeof(struct statfs), M_STATFS,
 				    M_WAITOK);
 				*sptmp = *sp;
@@ -964,34 +966,34 @@ flags_to_rights(int flags, cap_rights_t *rightsp)
 {
 
 	if (flags & O_EXEC) {
-		cap_rights_set(rightsp, CAP_FEXECVE);
+		cap_rights_set_one(rightsp, CAP_FEXECVE);
 	} else {
 		switch ((flags & O_ACCMODE)) {
 		case O_RDONLY:
-			cap_rights_set(rightsp, CAP_READ);
+			cap_rights_set_one(rightsp, CAP_READ);
 			break;
 		case O_RDWR:
-			cap_rights_set(rightsp, CAP_READ);
+			cap_rights_set_one(rightsp, CAP_READ);
 			/* FALLTHROUGH */
 		case O_WRONLY:
-			cap_rights_set(rightsp, CAP_WRITE);
+			cap_rights_set_one(rightsp, CAP_WRITE);
 			if (!(flags & (O_APPEND | O_TRUNC)))
-				cap_rights_set(rightsp, CAP_SEEK);
+				cap_rights_set_one(rightsp, CAP_SEEK);
 			break;
 		}
 	}
 
 	if (flags & O_CREAT)
-		cap_rights_set(rightsp, CAP_CREATE);
+		cap_rights_set_one(rightsp, CAP_CREATE);
 
 	if (flags & O_TRUNC)
-		cap_rights_set(rightsp, CAP_FTRUNCATE);
+		cap_rights_set_one(rightsp, CAP_FTRUNCATE);
 
 	if (flags & (O_SYNC | O_FSYNC))
-		cap_rights_set(rightsp, CAP_FSYNC);
+		cap_rights_set_one(rightsp, CAP_FSYNC);
 
 	if (flags & (O_EXLOCK | O_SHLOCK))
-		cap_rights_set(rightsp, CAP_FLOCK);
+		cap_rights_set_one(rightsp, CAP_FLOCK);
 }
 
 /*
@@ -1046,7 +1048,7 @@ kern_openat(struct thread *td, int fd, const char *path, enum uio_seg pathseg,
 
 	AUDIT_ARG_FFLAGS(flags);
 	AUDIT_ARG_MODE(mode);
-	cap_rights_init(&rights, CAP_LOOKUP);
+	cap_rights_init_one(&rights, CAP_LOOKUP);
 	flags_to_rights(flags, &rights);
 	/*
 	 * Only one of the O_EXEC, O_RDONLY, O_WRONLY and O_RDWR flags
@@ -2347,8 +2349,6 @@ kern_statat(struct thread *td, int flag, int fd, const char *path,
 	}
 	NDFREE(&nd, NDF_ONLY_PNBUF);
 	vput(nd.ni_vp);
-	if (error != 0)
-		return (error);
 #ifdef __STAT_TIME_T_EXT
 	sbp->st_atim_ext = 0;
 	sbp->st_mtim_ext = 0;
@@ -2357,9 +2357,9 @@ kern_statat(struct thread *td, int flag, int fd, const char *path,
 #endif
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_STRUCT))
-		ktrstat(sbp);
+		ktrstat_error(sbp, error);
 #endif
-	return (0);
+	return (error);
 }
 
 #if defined(COMPAT_FREEBSD11)
@@ -3752,7 +3752,7 @@ kern_frmdirat(struct thread *td, int dfd, const char *path, int fd,
 
 	fp = NULL;
 	if (fd != FD_NONE) {
-		error = getvnode(td, fd, cap_rights_init(&rights, CAP_LOOKUP),
+		error = getvnode(td, fd, cap_rights_init_one(&rights, CAP_LOOKUP),
 		    &fp);
 		if (error != 0)
 			return (error);
@@ -4173,7 +4173,7 @@ getvnode(struct thread *td, int fd, cap_rights_t *rightsp, struct file **fpp)
 	struct file *fp;
 	int error;
 
-	error = fget_unlocked(td->td_proc->p_fd, fd, rightsp, &fp, NULL);
+	error = fget_unlocked(td->td_proc->p_fd, fd, rightsp, &fp);
 	if (error != 0)
 		return (error);
 
@@ -4196,7 +4196,6 @@ getvnode(struct thread *td, int fd, cap_rights_t *rightsp, struct file **fpp)
 	*fpp = fp;
 	return (0);
 }
-
 
 /*
  * Get an (NFS) file handle.

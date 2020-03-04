@@ -517,17 +517,26 @@ powernv_node_numa_domain(platform_t platform, phandle_t node)
 	cell_t associativity[5];
 	int i, res;
 
-	res = OF_getproplen(node, "ibm,associativity");
-
-	/* If already at the root, use default domain. */
-	if (res == 0)
+#ifndef NUMA
+	return (0);
+#endif
+	if (vm_ndomains == 1)
 		return (0);
-	else if (res < 0)
-		/* If this node doesn't have associativity, check its parent. */
-		return (powernv_node_numa_domain(platform, OF_parent(node)));
 
-	OF_getencprop(node, "ibm,associativity",
-		associativity, res);
+	res = OF_getencprop(node, "ibm,associativity",
+		associativity, sizeof(associativity));
+
+	/*
+	 * If this node doesn't have associativity, or if there are not
+	 * enough elements in it, check its parent.
+	 */
+	if (res < (int)(sizeof(cell_t) * (platform_associativity + 1))) {
+		node = OF_parent(node);
+		/* If already at the root, use default domain. */
+		if (node == 0)
+			return (0);
+		return (powernv_node_numa_domain(platform, node));
+	}
 
 	for (i = 0; i < numa_max_domain; i++) {
 		if (numa_domains[i] == associativity[platform_associativity])

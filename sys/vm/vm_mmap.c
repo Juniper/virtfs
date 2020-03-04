@@ -225,7 +225,7 @@ kern_mmap_fpcheck(struct thread *td, uintptr_t addr0, size_t len, int prot,
 	max_prot = PROT_MAX_EXTRACT(prot);
 	prot = PROT_EXTRACT(prot);
 	if (max_prot != 0 && (max_prot & prot) != prot)
-		return (EINVAL);
+		return (ENOTSUP);
 
 	p = td->td_proc;
 
@@ -389,15 +389,15 @@ kern_mmap_fpcheck(struct thread *td, uintptr_t addr0, size_t len, int prot,
 		 * rights, but also return the maximum rights to be combined
 		 * with maxprot later.
 		 */
-		cap_rights_init(&rights, CAP_MMAP);
+		cap_rights_init_one(&rights, CAP_MMAP);
 		if (prot & PROT_READ)
-			cap_rights_set(&rights, CAP_MMAP_R);
+			cap_rights_set_one(&rights, CAP_MMAP_R);
 		if ((flags & MAP_SHARED) != 0) {
 			if (prot & PROT_WRITE)
-				cap_rights_set(&rights, CAP_MMAP_W);
+				cap_rights_set_one(&rights, CAP_MMAP_W);
 		}
 		if (prot & PROT_EXEC)
-			cap_rights_set(&rights, CAP_MMAP_X);
+			cap_rights_set_one(&rights, CAP_MMAP_X);
 		error = fget_mmap(td, fd, &rights, &cap_maxprot, &fp);
 		if (error != 0)
 			goto done;
@@ -668,7 +668,7 @@ kern_mprotect(struct thread *td, uintptr_t addr0, size_t size, int prot)
 	vm_error = KERN_SUCCESS;
 	if (max_prot != 0) {
 		if ((max_prot & prot) != prot)
-			return (EINVAL);
+			return (ENOTSUP);
 		vm_error = vm_map_protect(&td->td_proc->p_vmspace->vm_map,
 		    addr, addr + size, max_prot, TRUE);
 	}
@@ -895,8 +895,7 @@ retry:
 				while (object == NULL || m->object != object) {
 					if (object != NULL)
 						VM_OBJECT_WUNLOCK(object);
-					object = (vm_object_t)atomic_load_ptr(
-					    &m->object);
+					object = atomic_load_ptr(&m->object);
 					if (object == NULL)
 						goto retry;
 					VM_OBJECT_WLOCK(object);
@@ -1354,7 +1353,7 @@ vm_mmap_vnode(struct thread *td, vm_size_t objsize,
 	*objp = obj;
 	*flagsp = flags;
 
-	vfs_mark_atime(vp, cred);
+	VOP_MMAPPED(vp);
 
 done:
 	if (error != 0 && *writecounted) {

@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd September 9, 2019
+.Dd February 9, 2020
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -425,7 +425,7 @@ is used to set the hostname via DHCP,
 this variable should be set to an empty string.
 Within a
 .Xr jail 8
-the hostname is generally already set and this variable may absent.
+the hostname is generally already set and this variable may be absent.
 If this value remains unset when the system is done booting
 your console login will display the default hostname of
 .Dq Amnesiac .
@@ -1317,12 +1317,12 @@ ifconfig_em0_alias3="inet 192.0.2.1-5/28"
 .Pp
 and so on.
 .Pp
-Note that
+Note that deprecated
 .Va ipv4_addrs_ Ns Aq Ar interface
 variable was supported for IPv4 CIDR address notation.
-It is now deprecated because the functionality was integrated into
+The
 .Va ifconfig_ Ns Ao Ar interface Ac Ns Va _alias Ns Aq Ar n
-though
+variable replaces it, though
 .Va ipv4_addrs_ Ns Aq Ar interface
 is still supported for backward compatibility.
 .Pp

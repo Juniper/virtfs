@@ -71,6 +71,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/blockcount.h>
 #include <sys/cpuset.h>
 #include <sys/lock.h>
 #include <sys/mman.h>
@@ -149,7 +150,7 @@ struct mtx vm_object_list_mtx;	/* lock for object list and count */
 
 struct vm_object kernel_object_store;
 
-static SYSCTL_NODE(_vm_stats, OID_AUTO, object, CTLFLAG_RD, 0,
+static SYSCTL_NODE(_vm_stats, OID_AUTO, object, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
     "VM object stats");
 
 static counter_u64_t object_collapses = EARLY_COUNTER;
@@ -201,12 +202,11 @@ vm_object_zdtor(void *mem, int size, void *arg)
 	    ("object %p has reservations",
 	    object));
 #endif
-	KASSERT(REFCOUNT_COUNT(object->paging_in_progress) == 0,
+	KASSERT(blockcount_read(&object->paging_in_progress) == 0,
 	    ("object %p paging_in_progress = %d",
-	    object, REFCOUNT_COUNT(object->paging_in_progress)));
-	KASSERT(object->busy == 0,
-	    ("object %p busy = %d",
-	    object, object->busy));
+	    object, blockcount_read(&object->paging_in_progress)));
+	KASSERT(!vm_object_busied(object),
+	    ("object %p busy = %d", object, blockcount_read(&object->busy)));
 	KASSERT(object->resident_page_count == 0,
 	    ("object %p resident_page_count = %d",
 	    object, object->resident_page_count));
@@ -231,8 +231,8 @@ vm_object_zinit(void *mem, int size, int flags)
 	object->type = OBJT_DEAD;
 	vm_radix_init(&object->rtree);
 	refcount_init(&object->ref_count, 0);
-	refcount_init(&object->paging_in_progress, 0);
-	refcount_init(&object->busy, 0);
+	blockcount_init(&object->paging_in_progress);
+	blockcount_init(&object->busy);
 	object->resident_page_count = 0;
 	object->shadow_count = 0;
 	object->flags = OBJ_DEAD;
@@ -363,56 +363,55 @@ void
 vm_object_pip_add(vm_object_t object, short i)
 {
 
-	refcount_acquiren(&object->paging_in_progress, i);
+	if (i > 0)
+		blockcount_acquire(&object->paging_in_progress, i);
 }
 
 void
 vm_object_pip_wakeup(vm_object_t object)
 {
 
-	refcount_release(&object->paging_in_progress);
+	vm_object_pip_wakeupn(object, 1);
 }
 
 void
 vm_object_pip_wakeupn(vm_object_t object, short i)
 {
 
-	refcount_releasen(&object->paging_in_progress, i);
+	if (i > 0)
+		blockcount_release(&object->paging_in_progress, i);
 }
 
 /*
- * Atomically drop the interlock and wait for pip to drain.  This protects
- * from sleep/wakeup races due to identity changes.  The lock is not
- * re-acquired on return.
+ * Atomically drop the object lock and wait for pip to drain.  This protects
+ * from sleep/wakeup races due to identity changes.  The lock is not re-acquired
+ * on return.
  */
 static void
-vm_object_pip_sleep(vm_object_t object, char *waitid)
+vm_object_pip_sleep(vm_object_t object, const char *waitid)
 {
 
-	refcount_sleep_interlock(&object->paging_in_progress,
-	    &object->lock, waitid, PVM);
+	(void)blockcount_sleep(&object->paging_in_progress, &object->lock,
+	    waitid, PVM | PDROP);
 }
 
 void
-vm_object_pip_wait(vm_object_t object, char *waitid)
+vm_object_pip_wait(vm_object_t object, const char *waitid)
 {
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 
-	while (REFCOUNT_COUNT(object->paging_in_progress) > 0) {
-		vm_object_pip_sleep(object, waitid);
-		VM_OBJECT_WLOCK(object);
-	}
+	blockcount_wait(&object->paging_in_progress, &object->lock, waitid,
+	    PVM);
 }
 
 void
-vm_object_pip_wait_unlocked(vm_object_t object, char *waitid)
+vm_object_pip_wait_unlocked(vm_object_t object, const char *waitid)
 {
 
 	VM_OBJECT_ASSERT_UNLOCKED(object);
 
-	while (REFCOUNT_COUNT(object->paging_in_progress) > 0)
-		refcount_wait(&object->paging_in_progress, waitid, PVM);
+	blockcount_wait(&object->paging_in_progress, NULL, waitid, PVM);
 }
 
 /*
@@ -485,7 +484,6 @@ vm_object_allocate_anon(vm_pindex_t size, vm_object_t backing_object,
 static void
 vm_object_reference_vnode(vm_object_t object)
 {
-	struct vnode *vp;
 	u_int old;
 
 	/*
@@ -495,10 +493,8 @@ vm_object_reference_vnode(vm_object_t object)
 	if (!refcount_acquire_if_gt(&object->ref_count, 0)) {
 		VM_OBJECT_RLOCK(object);
 		old = refcount_acquire(&object->ref_count);
-		if (object->type == OBJT_VNODE && old == 0) {
-			vp = object->handle;
-			vref(vp);
-		}
+		if (object->type == OBJT_VNODE && old == 0)
+			vref(object->handle);
 		VM_OBJECT_RUNLOCK(object);
 	}
 }
@@ -533,13 +529,12 @@ vm_object_reference(vm_object_t object)
 void
 vm_object_reference_locked(vm_object_t object)
 {
-	struct vnode *vp;
 	u_int old;
 
 	VM_OBJECT_ASSERT_LOCKED(object);
 	old = refcount_acquire(&object->ref_count);
-	if (object->type == OBJT_VNODE && old == 0) {
-		vp = object->handle; vref(vp); }
+	if (object->type == OBJT_VNODE && old == 0)
+		vref(object->handle);
 	KASSERT((object->flags & OBJ_DEAD) == 0,
 	    ("vm_object_reference: Referenced dead object."));
 }
@@ -955,7 +950,7 @@ vm_object_terminate(vm_object_t object)
 	 */
 	vm_object_pip_wait(object, "objtrm");
 
-	KASSERT(!REFCOUNT_COUNT(object->paging_in_progress),
+	KASSERT(!blockcount_read(&object->paging_in_progress),
 	    ("vm_object_terminate: pageout in progress"));
 
 	KASSERT(object->ref_count == 0,
@@ -1017,6 +1012,10 @@ vm_object_page_remove_write(vm_page_t p, int flags, boolean_t *allclean)
  *	write out pages with PGA_NOSYNC set (originally comes from MAP_NOSYNC),
  *	leaving the object dirty.
  *
+ *	For swap objects backing tmpfs regular files, do not flush anything,
+ *	but remove write protection on the mapped pages to update mtime through
+ *	mmaped writes.
+ *
  *	When stuffing pages asynchronously, allow clustering.  XXX we need a
  *	synchronous clustering mode implementation.
  *
@@ -1038,8 +1037,7 @@ vm_object_page_clean(vm_object_t object, vm_ooffset_t start, vm_ooffset_t end,
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 
-	if (object->type != OBJT_VNODE || !vm_object_mightbedirty(object) ||
-	    object->resident_page_count == 0)
+	if (!vm_object_mightbedirty(object) || object->resident_page_count == 0)
 		return (TRUE);
 
 	pagerflags = (flags & (OBJPC_SYNC | OBJPC_INVAL)) != 0 ?
@@ -1072,32 +1070,36 @@ rescan:
 			vm_page_xunbusy(p);
 			continue;
 		}
+		if (object->type == OBJT_VNODE) {
+			n = vm_object_page_collect_flush(object, p, pagerflags,
+			    flags, &allclean, &eio);
+			if (eio) {
+				res = FALSE;
+				allclean = FALSE;
+			}
+			if (object->generation != curgeneration &&
+			    (flags & OBJPC_SYNC) != 0)
+				goto rescan;
 
-		n = vm_object_page_collect_flush(object, p, pagerflags,
-		    flags, &allclean, &eio);
-		if (eio) {
-			res = FALSE;
-			allclean = FALSE;
-		}
-		if (object->generation != curgeneration &&
-		    (flags & OBJPC_SYNC) != 0)
-			goto rescan;
-
-		/*
-		 * If the VOP_PUTPAGES() did a truncated write, so
-		 * that even the first page of the run is not fully
-		 * written, vm_pageout_flush() returns 0 as the run
-		 * length.  Since the condition that caused truncated
-		 * write may be permanent, e.g. exhausted free space,
-		 * accepting n == 0 would cause an infinite loop.
-		 *
-		 * Forwarding the iterator leaves the unwritten page
-		 * behind, but there is not much we can do there if
-		 * filesystem refuses to write it.
-		 */
-		if (n == 0) {
+			/*
+			 * If the VOP_PUTPAGES() did a truncated write, so
+			 * that even the first page of the run is not fully
+			 * written, vm_pageout_flush() returns 0 as the run
+			 * length.  Since the condition that caused truncated
+			 * write may be permanent, e.g. exhausted free space,
+			 * accepting n == 0 would cause an infinite loop.
+			 *
+			 * Forwarding the iterator leaves the unwritten page
+			 * behind, but there is not much we can do there if
+			 * filesystem refuses to write it.
+			 */
+			if (n == 0) {
+				n = 1;
+				allclean = FALSE;
+			}
+		} else {
 			n = 1;
-			allclean = FALSE;
+			vm_page_xunbusy(p);
 		}
 		np = vm_page_find_least(object, pi + n);
 	}
@@ -1105,7 +1107,12 @@ rescan:
 	VOP_FSYNC(vp, (pagerflags & VM_PAGER_PUT_SYNC) ? MNT_WAIT : 0);
 #endif
 
-	if (allclean)
+	/*
+	 * Leave updating cleangeneration for tmpfs objects to tmpfs
+	 * scan.  It needs to update mtime, which happens for other
+	 * filesystems during page writeouts.
+	 */
+	if (allclean && object->type == OBJT_VNODE)
 		object->cleangeneration = curgeneration;
 	return (res);
 }
@@ -1700,13 +1707,24 @@ vm_object_scan_all_shadowed(vm_object_t object)
 		if (new_pindex >= object->size)
 			break;
 
-		/*
-		 * If the backing object page is busy a grandparent or older
-		 * page may still be undergoing CoW.  It is not safe to
-		 * collapse the backing object until it is quiesced.
-		 */
-		if (p != NULL && vm_page_busied(p))
-			return (false);
+		if (p != NULL) {
+			/*
+			 * If the backing object page is busy a
+			 * grandparent or older page may still be
+			 * undergoing CoW.  It is not safe to collapse
+			 * the backing object until it is quiesced.
+			 */
+			if (vm_page_tryxbusy(p) == 0)
+				return (false);
+
+			/*
+			 * We raced with the fault handler that left
+			 * newly allocated invalid page on the object
+			 * queue and retried.
+			 */
+			if (!vm_page_all_valid(p))
+				goto unbusy_ret;
+		}
 
 		/*
 		 * See if the parent has the page or if the parent's object
@@ -1717,15 +1735,24 @@ vm_object_scan_all_shadowed(vm_object_t object)
 		 * object and we might as well give up now.
 		 */
 		pp = vm_page_lookup(object, new_pindex);
+
 		/*
-		 * The valid check here is stable due to object lock being
-		 * required to clear valid and initiate paging.
+		 * The valid check here is stable due to object lock
+		 * being required to clear valid and initiate paging.
+		 * Busy of p disallows fault handler to validate pp.
 		 */
 		if ((pp == NULL || vm_page_none_valid(pp)) &&
 		    !vm_pager_has_page(object, new_pindex, NULL, NULL))
-			return (false);
+			goto unbusy_ret;
+		if (p != NULL)
+			vm_page_xunbusy(p);
 	}
 	return (true);
+
+unbusy_ret:
+	if (p != NULL)
+		vm_page_xunbusy(p);
+	return (false);
 }
 
 static void
@@ -1769,6 +1796,14 @@ vm_object_collapse_scan(vm_object_t object)
 				swap_pager_freespace(backing_object, p->pindex,
 				    1);
 
+			KASSERT(!pmap_page_is_mapped(p),
+			    ("freeing mapped page %p", p));
+			if (vm_page_remove(p))
+				vm_page_free(p);
+			continue;
+		}
+
+		if (!vm_page_all_valid(p)) {
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
 			if (vm_page_remove(p))
@@ -2418,7 +2453,7 @@ vm_object_busy(vm_object_t obj)
 
 	VM_OBJECT_ASSERT_LOCKED(obj);
 
-	refcount_acquire(&obj->busy);
+	blockcount_acquire(&obj->busy, 1);
 	/* The fence is required to order loads of page busy. */
 	atomic_thread_fence_acq_rel();
 }
@@ -2427,8 +2462,7 @@ void
 vm_object_unbusy(vm_object_t obj)
 {
 
-
-	refcount_release(&obj->busy);
+	blockcount_release(&obj->busy, 1);
 }
 
 void
@@ -2437,8 +2471,7 @@ vm_object_busy_wait(vm_object_t obj, const char *wmesg)
 
 	VM_OBJECT_ASSERT_UNLOCKED(obj);
 
-	if (obj->busy)
-		refcount_sleep(&obj->busy, wmesg, PVM);
+	(void)blockcount_sleep(&obj->busy, NULL, wmesg, PVM);
 }
 
 /*

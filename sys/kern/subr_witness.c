@@ -361,7 +361,7 @@ static int	witness_output(const char *fmt, ...) __printflike(1, 2);
 static int	witness_voutput(const char *fmt, va_list ap) __printflike(1, 0);
 static void	witness_setflag(struct lock_object *lock, int flag, int set);
 
-static SYSCTL_NODE(_debug, OID_AUTO, witness, CTLFLAG_RW, NULL,
+static SYSCTL_NODE(_debug, OID_AUTO, witness, CTLFLAG_RW | CTLFLAG_MPSAFE, NULL,
     "Witness Locking");
 
 /*
@@ -372,8 +372,10 @@ static SYSCTL_NODE(_debug, OID_AUTO, witness, CTLFLAG_RW, NULL,
  * completely disabled.
  */
 static int witness_watch = 1;
-SYSCTL_PROC(_debug_witness, OID_AUTO, watch, CTLFLAG_RWTUN | CTLTYPE_INT, NULL, 0,
-    sysctl_debug_witness_watch, "I", "witness is watching lock operations");
+SYSCTL_PROC(_debug_witness, OID_AUTO, watch,
+    CTLFLAG_RWTUN | CTLTYPE_INT | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_debug_witness_watch, "I",
+    "witness is watching lock operations");
 
 #ifdef KDB
 /*
@@ -424,21 +426,26 @@ enum witness_channel {
 };
 
 static enum witness_channel witness_channel = WITNESS_CONSOLE;
-SYSCTL_PROC(_debug_witness, OID_AUTO, output_channel, CTLTYPE_STRING |
-    CTLFLAG_RWTUN, NULL, 0, sysctl_debug_witness_channel, "A",
+SYSCTL_PROC(_debug_witness, OID_AUTO, output_channel,
+    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_debug_witness_channel, "A",
     "Output channel for warnings");
 
 /*
  * Call this to print out the relations between locks.
  */
-SYSCTL_PROC(_debug_witness, OID_AUTO, fullgraph, CTLTYPE_STRING | CTLFLAG_RD,
-    NULL, 0, sysctl_debug_witness_fullgraph, "A", "Show locks relation graphs");
+SYSCTL_PROC(_debug_witness, OID_AUTO, fullgraph,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_debug_witness_fullgraph, "A",
+    "Show locks relation graphs");
 
 /*
  * Call this to print out the witness faulty stacks.
  */
-SYSCTL_PROC(_debug_witness, OID_AUTO, badstacks, CTLTYPE_STRING | CTLFLAG_RD,
-    NULL, 0, sysctl_debug_witness_badstacks, "A", "Show bad witness stacks");
+SYSCTL_PROC(_debug_witness, OID_AUTO, badstacks,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_debug_witness_badstacks, "A",
+    "Show bad witness stacks");
 
 static struct mtx w_mtx;
 
@@ -657,10 +664,6 @@ static struct witness_order_list_entry order_lists[] = {
 #ifdef __i386__
 	{ "cy", &lock_class_mtx_spin },
 #endif
-#ifdef __sparc64__
-	{ "pcib_mtx", &lock_class_mtx_spin },
-	{ "rtc_mtx", &lock_class_mtx_spin },
-#endif
 	{ "scc_hwmtx", &lock_class_mtx_spin },
 	{ "uart_hwmtx", &lock_class_mtx_spin },
 	{ "fast_taskqueue", &lock_class_mtx_spin },
@@ -692,9 +695,6 @@ static struct witness_order_list_entry order_lists[] = {
 	 */
 	{ "intrcnt", &lock_class_mtx_spin },
 	{ "icu", &lock_class_mtx_spin },
-#if defined(SMP) && defined(__sparc64__)
-	{ "ipi", &lock_class_mtx_spin },
-#endif
 #ifdef __i386__
 	{ "allpmaps", &lock_class_mtx_spin },
 	{ "descriptor tables", &lock_class_mtx_spin },
@@ -1915,7 +1915,6 @@ depart(struct witness *w)
 	witness_increment_graph_generation();
 }
 
-
 static void
 adopt(struct witness *parent, struct witness *child)
 {
@@ -2893,7 +2892,6 @@ witness_hash_djb2(const uint8_t *key, uint32_t size)
 	return (hash);
 }
 
-
 /*
  * Initializes the two witness hash tables. Called exactly once from
  * witness_initialize().
@@ -2965,7 +2963,6 @@ witness_hash_put(struct witness *w)
 	w_hash.wh_array[hash] = w;
 	w_hash.wh_count++;
 }
-
 
 static struct witness_lock_order_data *
 witness_lock_order_get(struct witness *parent, struct witness *child)

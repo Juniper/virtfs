@@ -342,8 +342,78 @@ bool __cap_rights_is_set(const cap_rights_t *rights, ...);
 bool cap_rights_is_valid(const cap_rights_t *rights);
 cap_rights_t *cap_rights_merge(cap_rights_t *dst, const cap_rights_t *src);
 cap_rights_t *cap_rights_remove(cap_rights_t *dst, const cap_rights_t *src);
-bool cap_rights_contains(const cap_rights_t *big, const cap_rights_t *little);
 void __cap_rights_sysinit(void *arg);
+
+#ifdef _KERNEL
+/*
+ * We only support one size to reduce branching.
+ */
+_Static_assert(CAP_RIGHTS_VERSION == CAP_RIGHTS_VERSION_00,
+    "unsupported version of capsicum rights");
+
+#define cap_rights_init_zero(r) ({					\
+	cap_rights_t *_r = (r);						\
+	CAP_NONE(_r);							\
+	_r;								\
+})
+
+#define cap_rights_init_one(r, right) ({				\
+	CTASSERT(CAPRVER(right) == CAP_RIGHTS_VERSION);			\
+	cap_rights_t *_r = (r);						\
+	CAP_NONE(_r);							\
+	_r->cr_rights[CAPIDXBIT(right) - 1] |= right;			\
+	_r;								\
+})
+
+#define cap_rights_set_one(r, right) ({					\
+	CTASSERT(CAPRVER(right) == CAP_RIGHTS_VERSION);			\
+	cap_rights_t *_r = (r);						\
+	_r->cr_rights[CAPIDXBIT(right) - 1] |= right;			\
+	_r;								\
+})
+
+/*
+ * Allow checking caps which are possibly getting modified at the same time.
+ * The caller is expected to determine whether the result is legitimate via
+ * other means, see fget_unlocked for an example.
+ */
+
+static inline bool
+cap_rights_contains_transient(const cap_rights_t *big, const cap_rights_t *little)
+{
+
+        if (__predict_true(
+            (big->cr_rights[0] & little->cr_rights[0]) == little->cr_rights[0] &&
+            (big->cr_rights[1] & little->cr_rights[1]) == little->cr_rights[1]))
+                return (true);
+        return (false);
+}
+
+#define cap_rights_contains cap_rights_contains_transient
+
+int cap_check_failed_notcapable(const cap_rights_t *havep,
+    const cap_rights_t *needp);
+
+static inline int
+cap_check_inline(const cap_rights_t *havep, const cap_rights_t *needp)
+{
+
+        if (__predict_false(!cap_rights_contains(havep, needp)))
+		return (cap_check_failed_notcapable(havep, needp));
+        return (0);
+}
+
+static inline int
+cap_check_inline_transient(const cap_rights_t *havep, const cap_rights_t *needp)
+{
+
+        if (__predict_false(!cap_rights_contains(havep, needp)))
+		return (1);
+        return (0);
+}
+#else
+bool cap_rights_contains(const cap_rights_t *big, const cap_rights_t *little);
+#endif
 
 __END_DECLS
 struct cap_rights_init_args {
@@ -465,7 +535,7 @@ int	cap_check(const cap_rights_t *havep, const cap_rights_t *needp);
 /*
  * Convert capability rights into VM access flags.
  */
-u_char	cap_rights_to_vmprot(const cap_rights_t *havep);
+vm_prot_t	cap_rights_to_vmprot(const cap_rights_t *havep);
 
 /*
  * For the purposes of procstat(1) and similar tools, allow kern_descrip.c to

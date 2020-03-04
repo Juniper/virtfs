@@ -240,7 +240,8 @@ static void	vtnet_accumulate_stats(struct vtnet_softc *);
 #endif
 
 /* Tunables. */
-static SYSCTL_NODE(_hw, OID_AUTO, vtnet, CTLFLAG_RD, 0, "VNET driver parameters");
+static SYSCTL_NODE(_hw, OID_AUTO, vtnet, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "VNET driver parameters");
 static int vtnet_csum_disable = 0;
 TUNABLE_INT("hw.vtnet.csum_disable", &vtnet_csum_disable);
 SYSCTL_INT(_hw_vtnet, OID_AUTO, csum_disable, CTLFLAG_RDTUN,
@@ -724,7 +725,7 @@ vtnet_init_rxq(struct vtnet_softc *sc, int id)
 	if (rxq->vtnrx_sg == NULL)
 		return (ENOMEM);
 
-	TASK_INIT(&rxq->vtnrx_intrtask, 0, vtnet_rxq_tq_intr, rxq);
+	NET_TASK_INIT(&rxq->vtnrx_intrtask, 0, vtnet_rxq_tq_intr, rxq);
 	rxq->vtnrx_tq = taskqueue_create(rxq->vtnrx_name, M_NOWAIT,
 	    taskqueue_thread_enqueue, &rxq->vtnrx_tq);
 
@@ -954,16 +955,14 @@ vtnet_setup_interface(struct vtnet_softc *sc)
 		return (ENOSPC);
 	}
 
-	if_initname_drv(ifp, device_get_name(dev), device_get_unit(dev));
-#if 0 /* FIXME */
-	if_initbaudrate(ifp, IF_Gbps(10));	/* Approx. */
-#endif
-	if_setsoftc(ifp, sc);
-	if_setflags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST);
-	if_setinitfn(ifp, vtnet_init);
-	if_setioctlfn(ifp, vtnet_ioctl);
-	if_setgetcounterfn(ifp, vtnet_get_counter);
-
+	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
+	ifp->if_baudrate = IF_Gbps(10);	/* Approx. */
+	ifp->if_softc = sc;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST |
+	    IFF_KNOWSEPOCH;
+	ifp->if_init = vtnet_init;
+	ifp->if_ioctl = vtnet_ioctl;
+	ifp->if_get_counter = vtnet_get_counter;
 #ifndef VTNET_LEGACY_TX
 	ifp->if_transmit = vtnet_txq_mq_start;
 	ifp->if_qflush = vtnet_qflush;
@@ -3838,7 +3837,7 @@ vtnet_setup_rxq_sysctl(struct sysctl_ctx_list *ctx,
 
 	snprintf(namebuf, sizeof(namebuf), "rxq%d", rxq->vtnrx_id);
 	node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, namebuf,
-	    CTLFLAG_RD, NULL, "Receive Queue");
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Receive Queue");
 	list = SYSCTL_CHILDREN(node);
 
 	stats = &rxq->vtnrx_stats;
@@ -3871,7 +3870,7 @@ vtnet_setup_txq_sysctl(struct sysctl_ctx_list *ctx,
 
 	snprintf(namebuf, sizeof(namebuf), "txq%d", txq->vtntx_id);
 	node = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, namebuf,
-	    CTLFLAG_RD, NULL, "Transmit Queue");
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "Transmit Queue");
 	list = SYSCTL_CHILDREN(node);
 
 	stats = &txq->vtntx_stats;

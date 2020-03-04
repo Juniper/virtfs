@@ -79,7 +79,6 @@ MAN=	aac.4 \
 	bhnd_pmu.4 \
 	bhndb.4 \
 	bhndb_pci.4 \
-	bktr.4 \
 	blackhole.4 \
 	bnxt.4 \
 	bpf.4 \
@@ -192,6 +191,7 @@ MAN=	aac.4 \
 	${_hv_vmbus.4} \
 	${_hv_vss.4} \
 	hwpmc.4 \
+	${_hwpstate_intel.4} \
 	iavf.4 \
 	ichsmb.4 \
 	${_ichwd.4} \
@@ -553,7 +553,6 @@ MAN=	aac.4 \
 	${_vmd.4} \
 	${_vmm.4} \
 	${_vmx.4} \
-	vpo.4 \
 	vr.4 \
 	vt.4 \
 	vte.4 \
@@ -601,7 +600,6 @@ MLINKS+=axe.4 if_axe.4
 MLINKS+=bce.4 if_bce.4
 MLINKS+=bfe.4 if_bfe.4
 MLINKS+=bge.4 if_bge.4
-MLINKS+=bktr.4 brooktree.4
 MLINKS+=bnxt.4 if_bnxt.4
 MLINKS+=bridge.4 if_bridge.4
 MLINKS+=bwi.4 if_bwi.4
@@ -740,7 +738,6 @@ MLINKS+=vge.4 if_vge.4
 MLINKS+=vlan.4 if_vlan.4
 MLINKS+=vxlan.4 if_vxlan.4
 MLINKS+=${_vmx.4} ${_if_vmx.4}
-MLINKS+=vpo.4 imm.4
 MLINKS+=vr.4 if_vr.4
 MLINKS+=vte.4 if_vte.4
 MLINKS+=${_vtnet.4} ${_if_vtnet.4}
@@ -789,6 +786,7 @@ _hv_storvsc.4=	hv_storvsc.4
 _hv_utils.4=	hv_utils.4
 _hv_vmbus.4=	hv_vmbus.4
 _hv_vss.4=	hv_vss.4
+_hwpstate_intel.4=	hwpstate_intel.4
 _i8254.4=	i8254.4
 _ichwd.4=	ichwd.4
 _if_bxe.4=	if_bxe.4

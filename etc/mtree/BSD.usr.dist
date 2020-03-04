@@ -201,9 +201,9 @@
             ..
         ..
         certs
-            blacklisted
+            blacklisted tags=package=caroot
             ..
-            trusted
+            trusted tags=package=caroot
             ..
         ..
         dict
@@ -1175,6 +1175,10 @@
                 man1
                 ..
                 man3
+                ..
+                man5
+                ..
+                man7
                 ..
             ..
         ..

@@ -794,7 +794,7 @@ ffs_mountfs(devvp, mp, td)
 	struct ucred *cred;
 	struct g_consumer *cp;
 	struct mount *nmp;
-	int candelete;
+	int candelete, canspeedup;
 	off_t loc;
 
 	fs = NULL;
@@ -1009,6 +1009,12 @@ ffs_mountfs(devvp, mp, td)
 			ump->um_trimhash = hashinit(MAXTRIMIO, M_TRIM,
 			    &ump->um_trimlisthashsize);
 		}
+	}
+
+	len = sizeof(int);
+	if (g_io_getattr("GEOM::canspeedup", cp, &len, &canspeedup) == 0) {
+		if (canspeedup)
+			ump->um_flags |= UM_CANSPEEDUP;
 	}
 
 	ump->um_mountp = mp;
@@ -1787,6 +1793,7 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 		 * still zero, it will be unlinked and returned to the free
 		 * list by vput().
 		 */
+		vgone(vp);
 		vput(vp);
 		*vpp = NULL;
 		return (error);
@@ -1797,6 +1804,7 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 		ip->i_din2 = uma_zalloc(uma_ufs2, M_WAITOK);
 	if ((error = ffs_load_inode(bp, ip, fs, ino)) != 0) {
 		bqrelse(bp);
+		vgone(vp);
 		vput(vp);
 		*vpp = NULL;
 		return (error);
@@ -1814,6 +1822,7 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 	error = ufs_vinit(mp, I_IS_UFS1(ip) ? &ffs_fifoops1 : &ffs_fifoops2,
 	    &vp);
 	if (error) {
+		vgone(vp);
 		vput(vp);
 		*vpp = NULL;
 		return (error);
@@ -1849,6 +1858,7 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 		error = mac_vnode_associate_extattr(mp, vp);
 		if (error) {
 			/* ufs_inactive will release ip->i_devvp ref. */
+			vgone(vp);
 			vput(vp);
 			*vpp = NULL;
 			return (error);

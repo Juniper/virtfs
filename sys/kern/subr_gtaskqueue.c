@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/epoch.h>
 #include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/gtaskqueue.h>
@@ -155,7 +156,6 @@ _gtaskqueue_create(const char *name, int mflags,
 
 	return (queue);
 }
-
 
 /*
  * Signal a taskqueue thread to terminate.
@@ -343,13 +343,16 @@ gtaskqueue_unblock(struct gtaskqueue *queue)
 static void
 gtaskqueue_run_locked(struct gtaskqueue *queue)
 {
+	struct epoch_tracker et;
 	struct gtaskqueue_busy tb;
 	struct gtask *gtask;
+	bool in_net_epoch;
 
 	KASSERT(queue != NULL, ("tq is NULL"));
 	TQ_ASSERT_LOCKED(queue);
 	tb.tb_running = NULL;
 	LIST_INSERT_HEAD(&queue->tq_active, &tb, tb_link);
+	in_net_epoch = false;
 
 	while ((gtask = STAILQ_FIRST(&queue->tq_queue)) != NULL) {
 		STAILQ_REMOVE_HEAD(&queue->tq_queue, ta_link);
@@ -359,11 +362,20 @@ gtaskqueue_run_locked(struct gtaskqueue *queue)
 		TQ_UNLOCK(queue);
 
 		KASSERT(gtask->ta_func != NULL, ("task->ta_func is NULL"));
+		if (!in_net_epoch && TASK_IS_NET(gtask)) {
+			in_net_epoch = true;
+			NET_EPOCH_ENTER(et);
+		} else if (in_net_epoch && !TASK_IS_NET(gtask)) {
+			NET_EPOCH_EXIT(et);
+			in_net_epoch = false;
+		}
 		gtask->ta_func(gtask->ta_context);
 
 		TQ_LOCK(queue);
 		wakeup(gtask);
 	}
+	if (in_net_epoch)
+		NET_EPOCH_EXIT(et);
 	LIST_REMOVE(&tb, tb_link);
 }
 
@@ -570,7 +582,6 @@ gtaskqueue_thread_enqueue(void *context)
 	wakeup_any(tq);
 }
 
-
 static struct gtaskqueue *
 gtaskqueue_create_fast(const char *name, int mflags,
 		 taskqueue_enqueue_fn enqueue, void *context)
@@ -578,7 +589,6 @@ gtaskqueue_create_fast(const char *name, int mflags,
 	return _gtaskqueue_create(name, mflags, enqueue, context,
 			MTX_SPIN, "fast_taskqueue");
 }
-
 
 struct taskqgroup_cpu {
 	LIST_HEAD(, grouptask)	tgc_tasks;

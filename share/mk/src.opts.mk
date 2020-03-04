@@ -69,7 +69,6 @@ __DEFAULT_YES_OPTIONS = \
     BOOTPARAMD \
     BOOTPD \
     BSD_CPIO \
-    BSD_CRTBEGIN \
     BSDINSTALL \
     BSNMP \
     BZIP2 \
@@ -79,6 +78,7 @@ __DEFAULT_YES_OPTIONS = \
     CASPER \
     CCD \
     CDDL \
+    CLANG \
     CPP \
     CROSS_COMPILER \
     CRYPT \
@@ -103,8 +103,8 @@ __DEFAULT_YES_OPTIONS = \
     FREEBSD_UPDATE \
     FTP \
     GAMES \
-    GCOV \
     GDB \
+    GDB_LIBEXEC \
     GNU_DIFF \
     GNU_GREP \
     GOOGLETEST \
@@ -127,8 +127,8 @@ __DEFAULT_YES_OPTIONS = \
     LEGACY_CONSOLE \
     LIBPTHREAD \
     LIBTHR \
+    LLD \
     LLVM_COV \
-    LLVM_LIBUNWIND \
     LLVM_TARGET_ALL \
     LOADER_GELI \
     LOADER_LUA \
@@ -200,13 +200,8 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_EXTRAS \
     DTRACE_TESTS \
     EXPERIMENTAL \
-    GCC \
-    GCC_BOOTSTRAP \
-    GNUCXX \
     GNU_GREP_COMPAT \
-    GPL_DTC \
     HESIOD \
-    HTTPD \
     LIBSOFT \
     LOADER_FIREWIRE \
     LOADER_FORCE_LE \
@@ -273,9 +268,8 @@ __LLVM_TARGETS= \
 		mips \
 		powerpc \
 		riscv \
-		sparc \
 		x86
-__LLVM_TARGET_FILT=	C/(amd64|i386)/x86/:S/sparc64/sparc/:S/arm64/aarch64/:S/powerpc64/powerpc/
+__LLVM_TARGET_FILT=	C/(amd64|i386)/x86/:S/arm64/aarch64/:S/powerpc64/powerpc/
 .for __llt in ${__LLVM_TARGETS}
 # Default enable the given TARGET's LLVM_TARGET support
 .if ${__TT:${__LLVM_TARGET_FILT}} == ${__llt}
@@ -288,30 +282,23 @@ __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_ARM/LLVM_TARGET_AARCH64
 __DEFAULT_DEPENDENT_OPTIONS+=	LLVM_TARGET_${__llt:${__LLVM_TARGET_FILT}:tu}/LLVM_TARGET_ALL
 .endif
 .endfor
+# until we can unwind clang + sparc
+MK_LLVM_TARGET_SPARC:=no
 
 __DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF
 
 .include <bsd.compiler.mk>
-# If the compiler is not C++11 capable, disable Clang.  External toolchain will
-# be required.
 
-.if ${COMPILER_FEATURES:Mc++11} && (${__TT} != "mips" && ${__TT} != "sparc64")
-# Clang is enabled, and will be installed as the default /usr/bin/cc.
-__DEFAULT_YES_OPTIONS+=CLANG CLANG_BOOTSTRAP CLANG_IS_CC LLD
-.elif ${COMPILER_FEATURES:Mc++11} && ${__T} != "sparc64"
-# If an external compiler that supports C++11 is used as ${CC} and Clang
-# supports the target, then Clang is enabled but we still require an external
-# toolchain.
-# default /usr/bin/cc.
-__DEFAULT_YES_OPTIONS+=CLANG LLD
-__DEFAULT_NO_OPTIONS+=CLANG_BOOTSTRAP CLANG_IS_CC
+.if ${__TT} != "mips"
+# Clang is installed as the default /usr/bin/cc.
+__DEFAULT_YES_OPTIONS+=CLANG_BOOTSTRAP CLANG_IS_CC
 .else
-# Everything else disables Clang, and uses GCC instead.
-__DEFAULT_NO_OPTIONS+=CLANG CLANG_BOOTSTRAP CLANG_IS_CC LLD
+# Clang is enabled but we still require an external toolchain.
+__DEFAULT_NO_OPTIONS+=CLANG_BOOTSTRAP CLANG_IS_CC
 .endif
 # In-tree binutils/gcc are older versions without modern architecture support.
 .if ${__T} == "aarch64" || ${__T:Mriscv*} != ""
-BROKEN_OPTIONS+=BINUTILS BINUTILS_BOOTSTRAP GCC GCC_BOOTSTRAP GDB
+BROKEN_OPTIONS+=BINUTILS BINUTILS_BOOTSTRAP GDB
 .endif
 .if ${__T} == "amd64" || ${__T} == "i386" || ${__T:Mpowerpc*}
 __DEFAULT_YES_OPTIONS+=BINUTILS_BOOTSTRAP
@@ -321,8 +308,7 @@ __DEFAULT_NO_OPTIONS+=BINUTILS_BOOTSTRAP
 .if ${__T:Mriscv*} != ""
 BROKEN_OPTIONS+=OFED
 .endif
-.if ${__TT} != "mips" && ${__T} != "powerpc" && ${__T} != "powerpcspe" && \
-    ${__T} != "sparc64"
+.if ${__TT} != "mips" && ${__T} != "powerpc" && ${__T} != "powerpcspe"
 __DEFAULT_YES_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
 .else
 __DEFAULT_NO_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
@@ -331,13 +317,6 @@ __DEFAULT_NO_OPTIONS+=LLD_BOOTSTRAP LLD_IS_LD
 __DEFAULT_YES_OPTIONS+=LLDB
 .else
 __DEFAULT_NO_OPTIONS+=LLDB
-.endif
-# GDB in base is generally less functional than GDB in ports.  Ports GDB
-# sparc64 kernel support has not been tested.
-.if ${__T} == "sparc64"
-__DEFAULT_NO_OPTIONS+=GDB_LIBEXEC
-.else
-__DEFAULT_YES_OPTIONS+=GDB_LIBEXEC
 .endif
 # LIB32 is supported on amd64, mips64, and powerpc64
 .if (${__T} == "amd64" || ${__T:Mmips64*} || ${__T} == "powerpc64")
@@ -350,25 +329,30 @@ BROKEN_OPTIONS+=LIB32
 BROKEN_OPTIONS+=LIBSOFT
 .endif
 .if ${__T:Mmips*}
-BROKEN_OPTIONS+=SSP
+# GOOGLETEST cannot currently be compiled on mips due to external circumstances.
+# Notably, the freebsd-gcc port isn't linking in libgcc so we end up trying ot
+# link to a hidden symbol. LLVM would successfully link this in, but some of
+# the mips variants are broken under LLVM until LLVM 10. GOOGLETEST should be
+# marked no longer broken with the switch to LLVM.
+BROKEN_OPTIONS+=GOOGLETEST SSP
 .endif
-# EFI doesn't exist on mips, powerpc, sparc or riscv.
-.if ${__T:Mmips*} || ${__T:Mpowerpc*} || ${__T:Msparc64} || ${__T:Mriscv*}
+# EFI doesn't exist on mips, powerpc, or riscv.
+.if ${__T:Mmips*} || ${__T:Mpowerpc*} || ${__T:Mriscv*}
 BROKEN_OPTIONS+=EFI
 .endif
-# OFW is only for powerpc and sparc64, exclude others
-.if ${__T:Mpowerpc*} == "" && ${__T:Msparc64} == ""
+# OFW is only for powerpc, exclude others
+.if ${__T:Mpowerpc*} == ""
 BROKEN_OPTIONS+=LOADER_OFW
 .endif
 # UBOOT is only for arm, mips and powerpc, exclude others
 .if ${__T:Marm*} == "" && ${__T:Mmips*} == "" && ${__T:Mpowerpc*} == ""
 BROKEN_OPTIONS+=LOADER_UBOOT
 .endif
-# GELI and Lua in loader currently cause boot failures on sparc64 and powerpc.
+# GELI and Lua in loader currently cause boot failures on powerpc.
 # Further debugging is required -- probably they are just broken on big
 # endian systems generically (they jump to null pointers or try to read
 # crazy high addresses, which is typical of endianness problems).
-.if ${__T} == "sparc64" || ${__T:Mpowerpc*}
+.if ${__T:Mpowerpc*}
 BROKEN_OPTIONS+=LOADER_GELI LOADER_LUA
 .endif
 
@@ -377,7 +361,7 @@ BROKEN_OPTIONS+=LOADER_GELI LOADER_LUA
 BROKEN_OPTIONS+=PROFILE
 .endif
 .if ${__T} != "aarch64" && ${__T} != "amd64" && ${__T} != "i386" && \
-    ${__T} != "powerpc64" && ${__T} != "sparc64"
+    ${__T} != "powerpc64"
 BROKEN_OPTIONS+=CXGBETOOL
 BROKEN_OPTIONS+=MLX5TOOL
 .endif
@@ -391,13 +375,6 @@ BROKEN_OPTIONS+=HYPERV
 .if ${__T} != "aarch64" && ${__T} != "amd64" && ${__T} != "i386" && \
     ${__T} != "powerpc64"
 BROKEN_OPTIONS+=NVME
-.endif
-
-.if ${__T:Msparc64}
-# Sparc64 need extra crt*.o files - PR 239851
-BROKEN_OPTIONS+=BSD_CRTBEGIN
-# PR 233405
-BROKEN_OPTIONS+=LLVM_LIBUNWIND
 .endif
 
 .if ${COMPILER_FEATURES:Mc++11} && \
@@ -437,7 +414,6 @@ MK_${var}:=	no
 #
 .if !${COMPILER_FEATURES:Mc++11}
 MK_GOOGLETEST:=	no
-MK_LLVM_LIBUNWIND:=	no
 .endif
 
 .if ${MK_CAPSICUM} == "no"
@@ -468,7 +444,6 @@ MK_KERBEROS_SUPPORT:=	no
 
 .if ${MK_CXX} == "no"
 MK_CLANG:=	no
-MK_GNUCXX:=	no
 MK_GOOGLETEST:=	no
 MK_TESTS:=	no
 .endif
@@ -479,10 +454,6 @@ MK_BSDINSTALL:=	no
 
 .if ${MK_FILE} == "no"
 MK_SVNLITE:=	no
-.endif
-
-.if (${__TT} == "mips" || ${__TT} == "sparc64") && ${MK_GCC} == "no"
-MK_BINUTILS_BOOTSTRAP:=	no
 .endif
 
 .if ${MK_MAIL} == "no"
@@ -543,14 +514,12 @@ MK_ZONEINFO_OLD_TIMEZONES_SUPPORT:= no
 MK_BINUTILS_BOOTSTRAP:= no
 MK_CLANG_BOOTSTRAP:= no
 MK_ELFTOOLCHAIN_BOOTSTRAP:= no
-MK_GCC_BOOTSTRAP:= no
 MK_LLD_BOOTSTRAP:= no
 .endif
 
 .if ${MK_TOOLCHAIN} == "no"
 MK_BINUTILS:=	no
 MK_CLANG:=	no
-MK_GCC:=	no
 MK_GDB:=	no
 MK_INCLUDES:=	no
 MK_LLD:=	no
@@ -588,17 +557,6 @@ MK_${vv:H}:=	${MK_${vv:T}}
 
 .if !${COMPILER_FEATURES:Mc++11}
 MK_LLDB:=	no
-.endif
-
-# gcc 4.8 and newer supports libc++, so suppress gnuc++ in that case.
-# while in theory we could build it with that, we don't want to do
-# that since it creates too much confusion for too little gain.
-# XXX: This is incomplete and needs X_COMPILER_TYPE/VERSION checks too
-#      to prevent Makefile.inc1 from bootstrapping unneeded dependencies
-#      and to support 'make delete-old' when supplying an external toolchain.
-.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 40800
-MK_GNUCXX:=no
-MK_GCC:=no
 .endif
 
 .endif #  !target(__<src.opts.mk>__)

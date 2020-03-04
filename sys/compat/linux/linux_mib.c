@@ -60,7 +60,12 @@ static struct linux_prison lprison0 = {
 
 static unsigned linux_osd_jail_slot;
 
-SYSCTL_NODE(_compat, OID_AUTO, linux, CTLFLAG_RW, 0, "Linux mode");
+SYSCTL_NODE(_compat, OID_AUTO, linux, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Linux mode");
+
+int linux_ignore_ip_recverr = 1;
+SYSCTL_INT(_compat_linux, OID_AUTO, ignore_ip_recverr, CTLFLAG_RWTUN,
+    &linux_ignore_ip_recverr, 0, "Ignore enabling IP_RECVERR");
 
 int linux_preserve_vstatus = 0;
 SYSCTL_INT(_compat_linux, OID_AUTO, preserve_vstatus, CTLFLAG_RWTUN,

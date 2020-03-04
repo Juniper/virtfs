@@ -224,7 +224,8 @@ static struct cdevsw aacraid_cdevsw = {
 MALLOC_DEFINE(M_AACRAIDBUF, "aacraid_buf", "Buffers for the AACRAID driver");
 
 /* sysctl node */
-SYSCTL_NODE(_hw, OID_AUTO, aacraid, CTLFLAG_RD, 0, "AACRAID driver parameters");
+SYSCTL_NODE(_hw, OID_AUTO, aacraid, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "AACRAID driver parameters");
 
 /*
  * Device Interface
@@ -902,6 +903,7 @@ aacraid_new_intr_type1(void *arg)
 	if (mode & AAC_INT_MODE_SYNC) {
 		if (sc->aac_sync_cm) {	
 			cm = sc->aac_sync_cm;
+			aac_unmap_command(cm);
 			cm->cm_flags |= AAC_CMD_COMPLETED;
 			/* is there a completion handler? */
 			if (cm->cm_complete != NULL) {

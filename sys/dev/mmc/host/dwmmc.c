@@ -67,8 +67,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/mmc/host/dwmmc_reg.h>
 #include <dev/mmc/host/dwmmc_var.h>
 
-#include "opt_mmccam.h"
-
 #include "mmcbr_if.h"
 
 #define dprintf(x, arg...)
@@ -1280,7 +1278,7 @@ dwmmc_read_ivar(device_t bus, device_t child, int which, uintptr_t *result)
 		*(int *)result = sc->host.caps;
 		break;
 	case MMCBR_IVAR_MAX_DATA:
-		*(int *)result = sc->desc_count;
+		*(int *)result = sc->desc_count - 1;
 		break;
 	case MMCBR_IVAR_TIMING:
 		*(int *)result = sc->host.ios.timing;

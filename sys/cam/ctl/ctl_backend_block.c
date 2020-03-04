@@ -222,7 +222,7 @@ struct ctl_be_block_io {
 extern struct ctl_softc *control_softc;
 
 static int cbb_num_threads = 14;
-SYSCTL_NODE(_kern_cam_ctl, OID_AUTO, block, CTLFLAG_RD, 0,
+SYSCTL_NODE(_kern_cam_ctl, OID_AUTO, block, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
 	    "CAM Target Layer Block Backend");
 SYSCTL_INT(_kern_cam_ctl_block, OID_AUTO, num_threads, CTLFLAG_RWTUN,
            &cbb_num_threads, 0, "Number of threads per backing file");
@@ -2367,9 +2367,10 @@ ctl_be_block_create(struct ctl_be_block_softc *softc, struct ctl_lun_req *req)
 	 * device, he can specify that when the LUN is created, or change
 	 * the tunable/sysctl to alter the default number of threads.
 	 */
-	retval = taskqueue_start_threads(&be_lun->io_taskqueue,
+	retval = taskqueue_start_threads_in_proc(&be_lun->io_taskqueue,
 					 /*num threads*/num_threads,
 					 /*priority*/PUSER,
+					 /*proc*/control_softc->ctl_proc,
 					 /*thread name*/
 					 "%s taskq", be_lun->lunname);
 

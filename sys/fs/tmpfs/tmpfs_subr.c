@@ -68,7 +68,8 @@ __FBSDID("$FreeBSD$");
 #include <fs/tmpfs/tmpfs_fifoops.h>
 #include <fs/tmpfs/tmpfs_vnops.h>
 
-SYSCTL_NODE(_vfs, OID_AUTO, tmpfs, CTLFLAG_RW, 0, "tmpfs file system");
+SYSCTL_NODE(_vfs, OID_AUTO, tmpfs, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "tmpfs file system");
 
 static long tmpfs_pages_reserved = TMPFS_PAGES_MINRESERVED;
 
@@ -1887,13 +1888,6 @@ tmpfs_itimes(struct vnode *vp, const struct timespec *acc,
 
 	/* XXX: FIX? The entropy here is desirable, but the harvesting may be expensive */
 	random_harvest_queue(node, sizeof(*node), RANDOM_FS_ATIME);
-}
-
-void
-tmpfs_update(struct vnode *vp)
-{
-
-	tmpfs_itimes(vp, NULL, NULL);
 }
 
 int

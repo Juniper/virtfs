@@ -76,11 +76,16 @@ struct fdescenttbl {
  */
 #define NDSLOTTYPE	u_long
 
+struct pwd {
+	volatile u_int pwd_refcount;
+	struct	vnode *pwd_cdir;		/* current directory */
+	struct	vnode *pwd_rdir;		/* root directory */
+	struct	vnode *pwd_jdir;		/* jail root directory */
+};
+
 struct filedesc {
 	struct	fdescenttbl *fd_files;	/* open files table */
-	struct	vnode *fd_cdir;		/* current directory */
-	struct	vnode *fd_rdir;		/* root directory */
-	struct	vnode *fd_jdir;		/* jail root directory */
+	struct	pwd *fd_pwd;		/* directories */
 	NDSLOTTYPE *fd_map;		/* bitmap of free fds */
 	int	fd_lastfile;		/* high-water mark of fd_ofiles */
 	int	fd_freefile;		/* approx. next free file */
@@ -204,8 +209,10 @@ int	fget_cap(struct thread *td, int fd, cap_rights_t *needrightsp,
 	    struct file **fpp, struct filecaps *havecapsp);
 
 /* Return a referenced file from an unlocked descriptor. */
-int	fget_unlocked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
+int	fget_unlocked_seq(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
 	    struct file **fpp, seqc_t *seqp);
+int	fget_unlocked(struct filedesc *fdp, int fd, cap_rights_t *needrightsp,
+	    struct file **fpp);
 
 /* Requires a FILEDESC_{S,X}LOCK held and returns without a ref. */
 static __inline struct file *
@@ -250,6 +257,17 @@ fd_modified(struct filedesc *fdp, int fd, seqc_t seqc)
 void	pwd_chdir(struct thread *td, struct vnode *vp);
 int	pwd_chroot(struct thread *td, struct vnode *vp);
 void	pwd_ensure_dirs(void);
+
+struct pwd *pwd_hold_filedesc(struct filedesc *fdp);
+struct pwd *pwd_hold(struct thread *td);
+void	pwd_drop(struct pwd *pwd);
+static inline void
+pwd_set(struct filedesc *fdp, struct pwd *newpwd)
+{
+
+	FILEDESC_XLOCK_ASSERT(fdp);
+	fdp->fd_pwd = newpwd;
+}
 
 #endif /* _KERNEL */
 

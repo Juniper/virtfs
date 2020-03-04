@@ -38,10 +38,11 @@ static const char rcsid[] =
 #endif
 
 
-static void		child_process(entry *, user *),
-			do_univ(user *);
+static void		child_process(entry *, user *);
 
 static WAIT_T		wait_on_child(PID_T, const char *);
+
+extern char	*environ;
 
 void
 do_command(e, u)
@@ -56,9 +57,6 @@ do_command(e, u)
 	/* fork to become asynchronous -- parent process is done immediately,
 	 * and continues to run the normal cron code, which means return to
 	 * tick().  the child and grandchild don't leave this function, alive.
-	 *
-	 * vfork() is unsuitable, since we have much to do, and the parent
-	 * needs to be able to run off and fork other processes.
 	 */
 	switch ((pid = fork())) {
 	case -1:
@@ -220,13 +218,13 @@ child_process(e, u)
 
 	/* fork again, this time so we can exec the user's command.
 	 */
-	switch (jobpid = vfork()) {
+	switch (jobpid = fork()) {
 	case -1:
-		log_it("CRON",getpid(),"error","can't vfork");
+		log_it("CRON",getpid(),"error","can't fork");
 		exit(ERROR_EXIT);
 		/*NOTREACHED*/
 	case 0:
-		Debug(DPROC, ("[%d] grandchild process Vfork()'ed\n",
+		Debug(DPROC, ("[%d] grandchild process fork()'ed\n",
 			      getpid()))
 
 		if (e->uid == ROOT_UID)
@@ -279,15 +277,11 @@ child_process(e, u)
 		close(stdin_pipe[READ_PIPE]);
 		close(stdout_pipe[WRITE_PIPE]);
 
-		/* set our login universe.  Do this in the grandchild
-		 * so that the child can invoke /usr/lib/sendmail
-		 * without surprises.
-		 */
-		do_univ(u);
+		environ = NULL;
 
 # if defined(LOGIN_CAP)
-		/* Set user's entire context, but skip the environment
-		 * as cron provides a separate interface for this
+		/* Set user's entire context, but note that PATH will
+		 * be overridden later
 		 */
 		if ((pwd = getpwnam(usernm)) == NULL)
 			pwd = getpwuid(e->uid);
@@ -299,7 +293,7 @@ child_process(e, u)
 		}
 		if (pwd &&
 		    setusercontext(lc, pwd, e->uid,
-			    LOGIN_SETALL & ~(LOGIN_SETPATH|LOGIN_SETENV)) == 0)
+			    LOGIN_SETALL) == 0)
 			(void) endpwent();
 		else {
 			/* fall back to the old method */
@@ -311,24 +305,24 @@ child_process(e, u)
 			if (setgid(e->gid) != 0) {
 				log_it(usernm, getpid(),
 				    "error", "setgid failed");
-				exit(ERROR_EXIT);
+				_exit(ERROR_EXIT);
 			}
 # if defined(BSD)
 			if (initgroups(usernm, e->gid) != 0) {
 				log_it(usernm, getpid(),
 				    "error", "initgroups failed");
-				exit(ERROR_EXIT);
+				_exit(ERROR_EXIT);
 			}
 # endif
 			if (setlogin(usernm) != 0) {
 				log_it(usernm, getpid(),
 				    "error", "setlogin failed");
-				exit(ERROR_EXIT);
+				_exit(ERROR_EXIT);
 			}
 			if (setuid(e->uid) != 0) {
 				log_it(usernm, getpid(),
 				    "error", "setuid failed");
-				exit(ERROR_EXIT);
+				_exit(ERROR_EXIT);
 			}
 			/* we aren't root after this..*/
 #if defined(LOGIN_CAP)
@@ -342,6 +336,18 @@ child_process(e, u)
 		 */
 		{
 			char	*shell = env_get("SHELL", e->envp);
+			char	**p;
+
+			/* Apply the environment from the entry, overriding existing
+			 * values (this will always set PATH, LOGNAME, etc.) putenv
+			 * should not fail unless malloc does.
+			 */
+			for (p = e->envp; *p; ++p) {
+				if (putenv(*p) != 0) {
+					warn("putenv");
+					_exit(ERROR_EXIT);
+				}
+			}
 
 # if DEBUGGING
 			if (DebugFlags & DTEST) {
@@ -352,9 +358,8 @@ child_process(e, u)
 				_exit(OK_EXIT);
 			}
 # endif /*DEBUGGING*/
-			execle(shell, shell, "-c", e->cmd, (char *)NULL,
-			    e->envp);
-			warn("execle: couldn't exec `%s'", shell);
+			execl(shell, shell, "-c", e->cmd, (char *)NULL);
+			warn("execl: couldn't exec `%s'", shell);
 			_exit(ERROR_EXIT);
 		}
 		break;
@@ -626,42 +631,4 @@ wait_on_child(PID_T childpid, const char *name) {
 	Debug(DPROC, ("\n"))
 
 	return waiter;
-}
-
-
-static void
-do_univ(u)
-	user	*u;
-{
-#if defined(sequent)
-/* Dynix (Sequent) hack to put the user associated with
- * the passed user structure into the ATT universe if
- * necessary.  We have to dig the gecos info out of
- * the user's password entry to see if the magic
- * "universe(att)" string is present.
- */
-
-	struct	passwd	*p;
-	char	*s;
-	int	i;
-
-	p = getpwuid(u->uid);
-	(void) endpwent();
-
-	if (p == NULL)
-		return;
-
-	s = p->pw_gecos;
-
-	for (i = 0; i < 4; i++)
-	{
-		if ((s = strchr(s, ',')) == NULL)
-			return;
-		s++;
-	}
-	if (strcmp(s, "universe(att)"))
-		return;
-
-	(void) universe(U_ATT);
-#endif
 }

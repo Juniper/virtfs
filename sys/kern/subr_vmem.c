@@ -201,7 +201,6 @@ static uma_zone_t vmem_zone;
 #define	VMEM_CONDVAR_WAIT(vm)		cv_wait(&vm->vm_cv, &vm->vm_lock)
 #define	VMEM_CONDVAR_BROADCAST(vm)	cv_broadcast(&vm->vm_cv)
 
-
 #define	VMEM_LOCK(vm)		mtx_lock(&vm->vm_lock)
 #define	VMEM_TRYLOCK(vm)	mtx_trylock(&vm->vm_lock)
 #define	VMEM_UNLOCK(vm)		mtx_unlock(&vm->vm_lock)
@@ -562,8 +561,7 @@ qc_init(vmem_t *vm, vmem_size_t qcache_max)
 		qc->qc_vmem = vm;
 		qc->qc_size = size;
 		qc->qc_cache = uma_zcache_create(qc->qc_name, size,
-		    NULL, NULL, NULL, NULL, qc_import, qc_release, qc,
-		    UMA_ZONE_VM);
+		    NULL, NULL, NULL, NULL, qc_import, qc_release, qc, 0);
 		MPASS(qc->qc_cache);
 	}
 }
@@ -669,10 +667,10 @@ vmem_startup(void)
 	mtx_init(&vmem_list_lock, "vmem list lock", NULL, MTX_DEF);
 	vmem_zone = uma_zcreate("vmem",
 	    sizeof(struct vmem), NULL, NULL, NULL, NULL,
-	    UMA_ALIGN_PTR, UMA_ZONE_VM);
+	    UMA_ALIGN_PTR, 0);
 	vmem_bt_zone = uma_zcreate("vmem btag",
 	    sizeof(struct vmem_btag), NULL, NULL, NULL, NULL,
-	    UMA_ALIGN_PTR, UMA_ZONE_VM | UMA_ZONE_NOFREE);
+	    UMA_ALIGN_PTR, UMA_ZONE_VM);
 #ifndef UMA_MD_SMALL_ALLOC
 	mtx_init(&vmem_bt_lock, "btag lock", NULL, MTX_DEF);
 	uma_prealloc(vmem_bt_zone, BT_MAXALLOC);

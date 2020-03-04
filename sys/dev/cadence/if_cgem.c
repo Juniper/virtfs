@@ -99,9 +99,10 @@ __FBSDID("$FreeBSD$");
 				 CSUM_TCP_IPV6 | CSUM_UDP_IPV6)
 
 static struct ofw_compat_data compat_data[] = {
-	{ "cadence,gem",	1 },
-	{ "cdns,macb",		1 },
-	{ NULL,			0 },
+	{ "cadence,gem",		1 },
+	{ "cdns,macb",			1 },
+	{ "sifive,fu540-c000-gem",	1 },
+	{ NULL,				0 },
 };
 
 struct cgem_softc {
@@ -1493,8 +1494,8 @@ cgem_add_sysctls(device_t dev)
 			&sc->txdefragfails, 0,
 			"Transmit m_defrag() failures");
 
-	tree = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "stats", CTLFLAG_RD,
-			       NULL, "GEM statistics");
+	tree = SYSCTL_ADD_NODE(ctx, child, OID_AUTO, "stats",
+	    CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "GEM statistics");
 	child = SYSCTL_CHILDREN(tree);
 
 	SYSCTL_ADD_UQUAD(ctx, child, OID_AUTO, "tx_bytes", CTLFLAG_RD,

@@ -3250,7 +3250,8 @@ static moduledata_t netgraph_mod = {
 	(NULL)
 };
 DECLARE_MODULE(netgraph, netgraph_mod, SI_SUB_NETGRAPH, SI_ORDER_FIRST);
-SYSCTL_NODE(_net, OID_AUTO, graph, CTLFLAG_RW, 0, "netgraph Family");
+SYSCTL_NODE(_net, OID_AUTO, graph, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "netgraph Family");
 SYSCTL_INT(_net_graph, OID_AUTO, abi_version, CTLFLAG_RD, SYSCTL_NULL_INT_PTR, NG_ABI_VERSION,"");
 SYSCTL_INT(_net_graph, OID_AUTO, msg_version, CTLFLAG_RD, SYSCTL_NULL_INT_PTR, NG_VERSION, "");
 
@@ -3384,8 +3385,10 @@ sysctl_debug_ng_dump_items(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_PROC(_debug, OID_AUTO, ng_dump_items, CTLTYPE_INT | CTLFLAG_RW,
-    0, sizeof(int), sysctl_debug_ng_dump_items, "I", "Number of allocated items");
+SYSCTL_PROC(_debug, OID_AUTO, ng_dump_items,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, 0, sizeof(int),
+    sysctl_debug_ng_dump_items, "I",
+    "Number of allocated items");
 #endif	/* NETGRAPH_DEBUG */
 
 /***********************************************************************
@@ -3772,11 +3775,14 @@ ng_send_fn2(node_p node, hook_p hook, item_p pitem, ng_item_fn2 *fn, void *arg1,
 static void
 ng_callout_trampoline(void *arg)
 {
+	struct epoch_tracker et;
 	item_p item = arg;
 
+	NET_EPOCH_ENTER(et);
 	CURVNET_SET(NGI_NODE(item)->nd_vnet);
 	ng_snd_item(item, 0);
 	CURVNET_RESTORE();
+	NET_EPOCH_EXIT(et);
 }
 
 int

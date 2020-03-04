@@ -135,6 +135,14 @@ __FBSDID("$FreeBSD$");
 
 #include <net/route.h>
 
+#ifdef INET6
+/*
+ * XXX: declare here to avoid to include many inet6 related files..
+ * should be more generalized?
+ */
+extern void	nd6_setmtu(struct ifnet *);
+#endif
+
 /*
  * Size of the route hash table.  Must be a power of two.
  */
@@ -175,6 +183,47 @@ __FBSDID("$FreeBSD$");
  * List of capabilities to strip
  */
 #define	BRIDGE_IFCAPS_STRIP		IFCAP_LRO
+
+/*
+ * Bridge locking
+ */
+#define BRIDGE_LOCK_INIT(_sc)		do {			\
+	mtx_init(&(_sc)->sc_mtx, "if_bridge", NULL, MTX_DEF);	\
+	cv_init(&(_sc)->sc_cv, "if_bridge_cv");			\
+} while (0)
+#define BRIDGE_LOCK_DESTROY(_sc)	do {	\
+	mtx_destroy(&(_sc)->sc_mtx);		\
+	cv_destroy(&(_sc)->sc_cv);		\
+} while (0)
+#define BRIDGE_LOCK(_sc)		mtx_lock(&(_sc)->sc_mtx)
+#define BRIDGE_UNLOCK(_sc)		mtx_unlock(&(_sc)->sc_mtx)
+#define BRIDGE_LOCK_ASSERT(_sc)		mtx_assert(&(_sc)->sc_mtx, MA_OWNED)
+#define BRIDGE_UNLOCK_ASSERT(_sc)	mtx_assert(&(_sc)->sc_mtx, MA_NOTOWNED)
+#define	BRIDGE_LOCK2REF(_sc, _err)	do {	\
+	mtx_assert(&(_sc)->sc_mtx, MA_OWNED);	\
+	if ((_sc)->sc_iflist_xcnt > 0)		\
+		(_err) = EBUSY;			\
+	else					\
+		(_sc)->sc_iflist_ref++;		\
+	mtx_unlock(&(_sc)->sc_mtx);		\
+} while (0)
+#define	BRIDGE_UNREF(_sc)		do {				\
+	mtx_lock(&(_sc)->sc_mtx);					\
+	(_sc)->sc_iflist_ref--;						\
+	if (((_sc)->sc_iflist_xcnt > 0) && ((_sc)->sc_iflist_ref == 0))	\
+		cv_broadcast(&(_sc)->sc_cv);				\
+	mtx_unlock(&(_sc)->sc_mtx);					\
+} while (0)
+#define	BRIDGE_XLOCK(_sc)		do {		\
+	mtx_assert(&(_sc)->sc_mtx, MA_OWNED);		\
+	(_sc)->sc_iflist_xcnt++;			\
+	while ((_sc)->sc_iflist_ref > 0)		\
+		cv_wait(&(_sc)->sc_cv, &(_sc)->sc_mtx);	\
+} while (0)
+#define	BRIDGE_XDROP(_sc)		do {	\
+	mtx_assert(&(_sc)->sc_mtx, MA_OWNED);	\
+	(_sc)->sc_iflist_xcnt--;		\
+} while (0)
 
 /*
  * Bridge interface list entry.
@@ -352,7 +401,8 @@ static struct bstp_cb_ops bridge_ops = {
 };
 
 SYSCTL_DECL(_net_link);
-static SYSCTL_NODE(_net_link, IFT_BRIDGE, bridge, CTLFLAG_RW, 0, "Bridge");
+static SYSCTL_NODE(_net_link, IFT_BRIDGE, bridge, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Bridge");
 
 /* only pass IP[46] packets when pfil is enabled */
 VNET_DEFINE_STATIC(int, pfil_onlyip) = 1;
@@ -614,7 +664,7 @@ sysctl_pfil_ipfw(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 SYSCTL_PROC(_net_link_bridge, OID_AUTO, ipfw,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_VNET,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_VNET | CTLFLAG_NEEDGIANT,
     &VNET_NAME(pfil_ipfw), 0, &sysctl_pfil_ipfw, "I",
     "Layer2 filter with IPFW");
 
@@ -772,7 +822,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	} args;
 	struct ifdrv *ifd = (struct ifdrv *) data;
 	const struct bridge_control *bc;
-	int error = 0;
+	int error = 0, oldmtu;
 
 	switch (cmd) {
 
@@ -818,11 +868,23 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				break;
 		}
 
+		oldmtu = ifp->if_mtu;
 		BRIDGE_LOCK(sc);
 		error = (*bc->bc_func)(sc, &args);
 		BRIDGE_UNLOCK(sc);
 		if (error)
 			break;
+
+		/*
+		 * Bridge MTU may change during addition of the first port.
+		 * If it did, do network layer specific procedure.
+		 */
+		if (ifp->if_mtu != oldmtu) {
+#ifdef INET6
+			nd6_setmtu(ifp);
+#endif
+			rt_updatemtu(ifp);
+		}
 
 		if (bc->bc_flags & BC_F_COPYOUT)
 			error = copyout(&args, ifd->ifd_data, ifd->ifd_len);

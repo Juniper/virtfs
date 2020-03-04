@@ -8,6 +8,8 @@ SUBDIR_PARALLEL=
 # Modules that include binary-only blobs of microcode should be selectable by
 # MK_SOURCELESS_UCODE option (see below).
 
+.include "${SYSDIR}/conf/config.mk"
+
 .if defined(MODULES_OVERRIDE) && !defined(ALL_MODULES)
 SUBDIR=${MODULES_OVERRIDE}
 .else
@@ -57,7 +59,6 @@ SUBDIR=	\
 	ath_rate \
 	ath_pci \
 	${_autofs} \
-	${_auxio} \
 	${_bce} \
 	${_bcm283x_clkman} \
 	${_bcm283x_pwm} \
@@ -66,7 +67,6 @@ SUBDIR=	\
 	bhnd \
 	${_bxe} \
 	${_bios} \
-	${_bktr} \
 	${_blake2} \
 	bnxt \
 	bridgestp \
@@ -110,7 +110,6 @@ SUBDIR=	\
 	${_efirt} \
 	${_em} \
 	${_ena} \
-	${_epic} \
 	esp \
 	${_et} \
 	evdev \
@@ -372,7 +371,6 @@ SUBDIR=	\
 	${_vmd} \
 	${_vmm} \
 	${_vmware} \
-	${_vpo} \
 	vr \
 	vte \
 	${_wbwd} \
@@ -398,9 +396,10 @@ _autofs=	autofs
 
 .if ${MK_CDDL} != "no" || defined(ALL_MODULES)
 .if (${MACHINE_CPUARCH} != "arm" || ${MACHINE_ARCH:Marmv[67]*} != "") && \
-	${MACHINE_CPUARCH} != "mips" && \
-	${MACHINE_CPUARCH} != "sparc64"
+	${MACHINE_CPUARCH} != "mips"
+.if ${KERN_OPTS:MKDTRACE_HOOKS}
 SUBDIR+=	dtrace
+.endif
 .endif
 SUBDIR+=	opensolaris
 .endif
@@ -558,7 +557,6 @@ _hwpmc_mips74k=	hwpmc_mips74k
 	${MACHINE_CPUARCH} != "mips" && ${MACHINE_CPUARCH} != "powerpc" && \
 	${MACHINE_CPUARCH} != "riscv"
 _syscons=	syscons
-_vpo=		vpo
 .endif
 
 .if ${MACHINE_CPUARCH} != "mips"
@@ -584,7 +582,6 @@ _agp=		agp
 _an=		an
 _aout=		aout
 _bios=		bios
-_bktr=		bktr
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
 .endif
@@ -717,7 +714,9 @@ _sgx_linux=	sgx_linux
 _smartpqi=	smartpqi
 
 .if ${MK_BHYVE} != "no" || defined(ALL_MODULES)
+.if ${KERN_OPTS:MSMP}
 _vmm=		vmm
+.endif
 .endif
 .endif
 
@@ -727,7 +726,7 @@ _vmm=		vmm
 _3dfx=		3dfx
 _3dfx_linux=	3dfx_linux
 _apm=		apm
-.if ${MK_SOURCELESS_UCODE} != "no"
+.if ${MK_SOURCELESS_HOST} != "no"
 _ce=		ce
 .endif
 .if ${MK_SOURCELESS_UCODE} != "no"
@@ -773,12 +772,6 @@ _nvram=		opal_nvram
 _nvram+=	powermac_nvram
 .endif
 
-.if ${MACHINE_CPUARCH} == "sparc64"
-_auxio=		auxio
-_em=		em
-_epic=		epic
-.endif
-
 .if (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
      ${MACHINE_ARCH:Marmv[67]*} != "" || ${MACHINE_CPUARCH} == "i386")
 _cloudabi32=	cloudabi32
@@ -809,8 +802,6 @@ afterinstall: .PHONY
 		${KLDXREF_CMD} ${DESTDIR}${KMODDIR}; \
 	fi
 .endif
-
-.include "${SYSDIR}/conf/config.mk"
 
 SUBDIR:= ${SUBDIR:u:O}
 

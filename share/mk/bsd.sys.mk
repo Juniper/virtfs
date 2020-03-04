@@ -111,6 +111,11 @@ CWARNFLAGS.clang+=	-Wno-parentheses
 .if defined(NO_WARRAY_BOUNDS)
 CWARNFLAGS.clang+=	-Wno-array-bounds
 .endif # NO_WARRAY_BOUNDS
+.if defined(NO_WMISLEADING_INDENTATION) && \
+    ((${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 100000) || \
+     (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 60100))
+CWARNFLAGS+=		-Wno-misleading-indentation
+.endif # NO_WMISLEADING_INDENTATION
 .endif # WARNS
 
 .if defined(FORMAT_AUDIT)
@@ -154,8 +159,7 @@ CWARNFLAGS+=	-Wno-error=address			\
 
 # GCC 6.1.0
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 60100
-CWARNFLAGS+=	-Wno-error=misleading-indentation	\
-		-Wno-error=nonnull-compare		\
+CWARNFLAGS+=	-Wno-error=nonnull-compare		\
 		-Wno-error=shift-negative-value		\
 		-Wno-error=tautological-compare		\
 		-Wno-error=unused-const-variable
@@ -210,10 +214,6 @@ CLANG_OPT_SMALL+= -mllvm -enable-gvn=false
 CLANG_OPT_SMALL+= -mllvm -enable-load-pre=false
 .endif
 CFLAGS.clang+=	 -Qunused-arguments
-.if ${MACHINE_CPUARCH} == "sparc64"
-# Don't emit .cfi directives, since we must use GNU as on sparc64, for now.
-CFLAGS.clang+=	 -fno-dwarf2-cfi-asm
-.endif # SPARC64
 # The libc++ headers use c++11 extensions.  These are normally silenced because
 # they are treated as system headers, but we explicitly disable that warning
 # suppression when building the base system to catch bugs in our headers.

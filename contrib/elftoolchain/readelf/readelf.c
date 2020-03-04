@@ -3669,6 +3669,8 @@ dump_notes(struct readelf *re)
 
 static struct flag_desc note_feature_ctl_flags[] = {
 	{ NT_FREEBSD_FCTL_ASLR_DISABLE,		"ASLR_DISABLE" },
+	{ NT_FREEBSD_FCTL_PROTMAX_DISABLE,	"PROTMAX_DISABLE" },
+	{ NT_FREEBSD_FCTL_STKGAP_DISABLE,	"STKGAP_DISABLE" },
 	{ 0, NULL }
 };
 
@@ -5964,6 +5966,7 @@ dump_dwarf_frame_regtable(struct readelf *re, Dwarf_Fde fde, Dwarf_Addr pc,
 	for (; cur_pc < end_pc; cur_pc++) {
 		if (dwarf_get_fde_info_for_all_regs(fde, cur_pc, &rt, &row_pc,
 		    &de) != DW_DLV_OK) {
+			free(vec);
 			warnx("dwarf_get_fde_info_for_all_regs failed: %s\n",
 			    dwarf_errmsg(de));
 			return (-1);
@@ -6298,8 +6301,8 @@ search_loclist_at(struct readelf *re, Dwarf_Die die, Dwarf_Unsigned lowpc,
 		if (*la_list_cap == *la_list_len) {
 			*la_list = realloc(*la_list,
 			    *la_list_cap * 2 * sizeof(**la_list));
-			if (la_list == NULL)
-				errx(EXIT_FAILURE, "realloc failed");
+			if (*la_list == NULL)
+				err(EXIT_FAILURE, "realloc failed");
 			*la_list_cap *= 2;
 		}
 		la = &((*la_list)[*la_list_len]);
@@ -7247,7 +7250,6 @@ dump_object(struct readelf *re, int fd)
 
 done:
 	elf_end(re->elf);
-	close(fd);
 }
 
 static void

@@ -108,7 +108,7 @@ static vop_getattr_t	ufs_getattr;
 static vop_ioctl_t	ufs_ioctl;
 static vop_link_t	ufs_link;
 static int ufs_makeinode(int mode, struct vnode *, struct vnode **, struct componentname *, const char *);
-static vop_markatime_t	ufs_markatime;
+static vop_mmapped_t	ufs_mmapped;
 static vop_mkdir_t	ufs_mkdir;
 static vop_mknod_t	ufs_mknod;
 static vop_open_t	ufs_open;
@@ -125,7 +125,8 @@ static vop_whiteout_t	ufs_whiteout;
 static vop_close_t	ufsfifo_close;
 static vop_kqfilter_t	ufsfifo_kqfilter;
 
-SYSCTL_NODE(_vfs, OID_AUTO, ufs, CTLFLAG_RD, 0, "UFS filesystem");
+SYSCTL_NODE(_vfs, OID_AUTO, ufs, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "UFS filesystem");
 
 /*
  * A virgin directory (no blushing please).
@@ -676,19 +677,22 @@ out:
 }
 #endif /* UFS_ACL */
 
-/*
- * Mark this file's access time for update for vfs_mark_atime().  This
- * is called from execve() and mmap().
- */
 static int
-ufs_markatime(ap)
-	struct vop_markatime_args /* {
+ufs_mmapped(ap)
+	struct vop_mmapped_args /* {
 		struct vnode *a_vp;
 	} */ *ap;
 {
-	struct inode *ip = VTOI(ap->a_vp);
+	struct vnode *vp;
+	struct inode *ip;
+	struct mount *mp;
 
-	UFS_INODE_SET_FLAG_SHARED(ip, IN_ACCESS);
+	vp = ap->a_vp;
+	ip = VTOI(vp);
+	mp = vp->v_mount;
+
+	if ((mp->mnt_flag & (MNT_NOATIME | MNT_RDONLY)) == 0)
+		UFS_INODE_SET_FLAG_SHARED(ip, IN_ACCESS);
 	/*
 	 * XXXKIB No UFS_UPDATE(ap->a_vp, 0) there.
 	 */
@@ -1839,6 +1843,7 @@ ufs_mkdir(ap)
 			if (DOINGSOFTDEP(tvp))
 				softdep_revert_link(dp, ip);
 			UFS_VFREE(tvp, ip->i_number, dmode);
+			vgone(tvp);
 			vput(tvp);
 			return (error);
 		}
@@ -1853,6 +1858,7 @@ ufs_mkdir(ap)
 		if (DOINGSOFTDEP(tvp))
 			softdep_revert_link(dp, ip);
 		UFS_VFREE(tvp, ip->i_number, dmode);
+		vgone(tvp);
 		vput(tvp);
 		return (error);
 	}
@@ -1980,7 +1986,7 @@ bad:
 		UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 		if (DOINGSOFTDEP(tvp))
 			softdep_revert_mkdir(dp, ip);
-
+		vgone(tvp);
 		vput(tvp);
 	}
 out:
@@ -2607,6 +2613,7 @@ ufs_makeinode(mode, dvp, vpp, cnp, callfunc)
 			if (DOINGSOFTDEP(tvp))
 				softdep_revert_link(pdir, ip);
 			UFS_VFREE(tvp, ip->i_number, mode);
+			vgone(tvp);
 			vput(tvp);
 			return (error);
 		}
@@ -2621,6 +2628,7 @@ ufs_makeinode(mode, dvp, vpp, cnp, callfunc)
 		if (DOINGSOFTDEP(tvp))
 			softdep_revert_link(pdir, ip);
 		UFS_VFREE(tvp, ip->i_number, mode);
+		vgone(tvp);
 		vput(tvp);
 		return (error);
 	}
@@ -2691,6 +2699,7 @@ bad:
 	UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 	if (DOINGSOFTDEP(tvp))
 		softdep_revert_create(VTOI(dvp), ip);
+	vgone(tvp);
 	vput(tvp);
 	return (error);
 }
@@ -2736,7 +2745,7 @@ struct vop_vector ufs_vnodeops = {
 	.vop_ioctl =		ufs_ioctl,
 	.vop_link =		ufs_link,
 	.vop_lookup =		vfs_cache_lookup,
-	.vop_markatime =	ufs_markatime,
+	.vop_mmapped =		ufs_mmapped,
 	.vop_mkdir =		ufs_mkdir,
 	.vop_mknod =		ufs_mknod,
 	.vop_need_inactive =	ufs_need_inactive,
@@ -2778,7 +2787,6 @@ struct vop_vector ufs_fifoops = {
 	.vop_getattr =		ufs_getattr,
 	.vop_inactive =		ufs_inactive,
 	.vop_kqfilter =		ufsfifo_kqfilter,
-	.vop_markatime =	ufs_markatime,
 	.vop_pathconf = 	ufs_pathconf,
 	.vop_print =		ufs_print,
 	.vop_read =		VOP_PANIC,

@@ -463,8 +463,6 @@ extern	struct vattr va_null;		/* predefined null vattr structure */
 #define	VDESC_VP1_WILLRELE	0x0002
 #define	VDESC_VP2_WILLRELE	0x0004
 #define	VDESC_VP3_WILLRELE	0x0008
-#define	VDESC_NOMAP_VPP		0x0100
-#define	VDESC_VPP_WILLRELE	0x0200
 
 /*
  * A generic structure.
@@ -632,7 +630,8 @@ int	insmntque(struct vnode *vp, struct mount *mp);
 u_quad_t init_va_filerev(void);
 int	speedup_syncer(void);
 int	vn_vptocnp(struct vnode **vp, struct ucred *cred, char *buf,
-	    u_int *buflen);
+	    size_t *buflen);
+int	vn_getcwd(struct thread *td, char *buf, char **retbuf, size_t *buflen);
 int	vn_fullpath(struct thread *td, struct vnode *vn,
 	    char **retbuf, char **freebuf);
 int	vn_fullpath_global(struct thread *td, struct vnode *vn,
@@ -690,7 +689,7 @@ int	vn_generic_copy_file_range(struct vnode *invp, off_t *inoffp,
 	    struct thread *fsize_td);
 int	vn_need_pageq_flush(struct vnode *vp);
 int	vn_isdisk(struct vnode *vp, int *errp);
-int	_vn_lock(struct vnode *vp, int flags, char *file, int line);
+int	_vn_lock(struct vnode *vp, int flags, const char *file, int line);
 #define vn_lock(vp, flags) _vn_lock(vp, flags, __FILE__, __LINE__)
 int	vn_open(struct nameidata *ndp, int *flagp, int cmode, struct file *fp);
 int	vn_open_cred(struct nameidata *ndp, int *flagp, int cmode,
@@ -825,7 +824,6 @@ void	vop_strategy_pre(void *a);
 void	vop_lock_pre(void *a);
 void	vop_lock_post(void *a, int rc);
 void	vop_unlock_pre(void *a);
-void	vop_unlock_post(void *a, int rc);
 void	vop_need_inactive_pre(void *a);
 void	vop_need_inactive_post(void *a, int rc);
 #else
@@ -833,7 +831,6 @@ void	vop_need_inactive_post(void *a, int rc);
 #define	vop_lock_pre(x)		do { } while (0)
 #define	vop_lock_post(x, y)	do { } while (0)
 #define	vop_unlock_pre(x)	do { } while (0)
-#define	vop_unlock_post(x, y)	do { } while (0)
 #define	vop_need_inactive_pre(x)	do { } while (0)
 #define	vop_need_inactive_post(x, y)	do { } while (0)
 #endif
@@ -901,6 +898,7 @@ void	vrele(struct vnode *vp);
 void	vref(struct vnode *vp);
 void	vrefl(struct vnode *vp);
 void	vrefact(struct vnode *vp);
+void	vrefactn(struct vnode *vp, u_int n);
 int	vrefcnt(struct vnode *vp);
 void 	v_addpollinfo(struct vnode *vp);
 
@@ -937,7 +935,6 @@ void vfs_hash_rehash(struct vnode *vp, u_int hash);
 void vfs_hash_remove(struct vnode *vp);
 
 int vfs_kqfilter(struct vop_kqfilter_args *);
-void vfs_mark_atime(struct vnode *vp, struct ucred *cred);
 struct dirent;
 int vfs_read_dirent(struct vop_readdir_args *ap, struct dirent *dp, off_t off);
 int vfs_emptydir(struct vnode *vp);
@@ -955,6 +952,8 @@ int vn_chown(struct file *fp, uid_t uid, gid_t gid, struct ucred *active_cred,
     struct thread *td);
 
 void vn_fsid(struct vnode *vp, struct vattr *va);
+
+int vn_dir_check_exec(struct vnode *vp, struct componentname *cnp);
 
 #define VOP_UNLOCK_FLAGS(vp, flags)	({				\
 	struct vnode *_vp = (vp);					\
