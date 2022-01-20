@@ -343,8 +343,8 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 	 */
 	VIRTFS_LOCK(vses);
 	STAILQ_INSERT_TAIL(&vses->virt_node_list, np, virtfs_node_next);
-	VIRTFS_UNLOCK(vses);
 	np->flags |= VIRTFS_NODE_IN_SESSION;
+	VIRTFS_UNLOCK(vses);
 
 	lockmgr(vp->v_vnlock, LK_EXCLUSIVE, NULL);
 	error = insmntque(vp, mp);
@@ -388,12 +388,12 @@ out:
 	 * We try again here, incase it is missed from vput(), as
 	 * we added this vnode explicitly to virt_node_list above.
 	 */
+	VIRTFS_LOCK(vses);
 	if ((np->flags & VIRTFS_NODE_IN_SESSION) != 0) {
-		VIRTFS_LOCK(vses);
-		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
-		VIRTFS_UNLOCK(vses);
 		np->flags &= ~VIRTFS_NODE_IN_SESSION;
+		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
 	}
+	VIRTFS_UNLOCK(vses);
 	virtfs_dispose_node(&np);
 	*vpp = NULLVP;
 	return (error);

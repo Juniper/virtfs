@@ -119,12 +119,12 @@ virtfs_cleanup(struct virtfs_node *np)
 	VIRTFS_VOFID_LOCK_DESTROY(np);
 
 	/* Remove the virtfs_node from the list before we cleanup.*/
+	VIRTFS_LOCK(vses);
 	if ((np->flags & VIRTFS_NODE_IN_SESSION) != 0) {
-		VIRTFS_LOCK(vses);
-		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
-		VIRTFS_UNLOCK(vses);
 		np->flags &= ~VIRTFS_NODE_IN_SESSION;
+		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
 	}
+	VIRTFS_UNLOCK(vses);
 
 	/* Dispose all node knowledge.*/
 	virtfs_dispose_node(&np);
