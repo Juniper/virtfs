@@ -99,8 +99,21 @@ virtfs_cleanup(struct virtfs_node *np)
 	struct vnode *vp;
 	struct virtfs_session *vses;
 
+	if (np == NULL)
+		return;
+
 	vp = VIRTFS_NTOV(np);
 	vses = np->virtfs_ses;
+
+	VIRTFS_LOCK(vses);
+	if ((np->flags & VIRTFS_NODE_IN_SESSION) != 0) {
+		np->flags &= ~VIRTFS_NODE_IN_SESSION;
+		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
+	} else {
+		VIRTFS_UNLOCK(vses);
+		return;
+	}
+	VIRTFS_UNLOCK(vses);
 
 	/* Invalidate all entries to a particular vnode. */
 	cache_purge(vp);
@@ -117,14 +130,6 @@ virtfs_cleanup(struct virtfs_node *np)
 	/* Destroy the FID LIST locks */
 	VIRTFS_VFID_LOCK_DESTROY(np);
 	VIRTFS_VOFID_LOCK_DESTROY(np);
-
-	/* Remove the virtfs_node from the list before we cleanup.*/
-	VIRTFS_LOCK(vses);
-	if ((np->flags & VIRTFS_NODE_IN_SESSION) != 0) {
-		np->flags &= ~VIRTFS_NODE_IN_SESSION;
-		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
-	}
-	VIRTFS_UNLOCK(vses);
 
 	/* Dispose all node knowledge.*/
 	virtfs_dispose_node(&np);

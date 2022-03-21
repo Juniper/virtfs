@@ -211,6 +211,9 @@ virtfs_node_cmp(struct vnode *vp, void *arg)
 	np = vp->v_data;
 	qid = (struct p9_qid *)arg;
 
+	if(np == NULL)
+		return 1;
+
 	if (np->vqid.qid_path == qid->path) {
 		if (vp->v_vflag & VV_ROOT)
 			return 0;
@@ -251,6 +254,7 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 	uint32_t hash;
 	int error;
 	struct virtfs_inode *inode;
+	int error_reload = 0;
 
 	td = curthread;
 	vmp = VFSTOP9(mp);
@@ -333,19 +337,6 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 	inode->i_qid_path = fid->qid.path;
 	VIRTFS_SET_LINKS(inode);
 
-	/*
-	 * Add the VirtFS node to the list for cleanup later.
-	 * Cleanup of this VirtFS node from the list of session
-	 * VirtFS nodes happen in vput() :
-	 * 	- In vfs_hash_insert() after inserting this node
-	 *	  to the VFS hash table.
-	 *	- In error handling below.
-	 */
-	VIRTFS_LOCK(vses);
-	STAILQ_INSERT_TAIL(&vses->virt_node_list, np, virtfs_node_next);
-	np->flags |= VIRTFS_NODE_IN_SESSION;
-	VIRTFS_UNLOCK(vses);
-
 	lockmgr(vp->v_vnlock, LK_EXCLUSIVE, NULL);
 	error = insmntque(vp, mp);
 	if (error != 0) {
@@ -359,19 +350,27 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 	/* Init the vnode with the disk info*/
 	error = virtfs_reload_stats_dotl(vp);
 	if (error != 0) {
-		vput(vp);
+		error_reload = 1;
 		goto out;
 	}
 
 	error = vfs_hash_insert(vp, hash, flags, td, vpp,
 	    virtfs_node_cmp, &fid->qid);
-	if (error != 0) {
+	if (error != 0 || *vpp != NULL) {
+		/*
+		 *  vp is vput already: either v2 from free list vnode
+		 *  found with the hash and is assigned to vpp or v2
+		 *  retrieval fails.
+		 */
 		goto out;
 	}
-	if (*vpp == NULL) {
-		*vpp = vp;
-	}
 
+	VIRTFS_LOCK(vses);
+	STAILQ_INSERT_TAIL(&vses->virt_node_list, np, virtfs_node_next);
+	np->flags |= VIRTFS_NODE_IN_SESSION;
+	VIRTFS_UNLOCK(vses);
+
+	*vpp = vp;
 	return (0);
 out:
 	if (!IS_ROOT(np)) {
@@ -382,19 +381,12 @@ out:
 
 	/* Something went wrong, dispose the node */
 
-	/*
-	 * Remove the virtfs_node from the list before we cleanup.
-	 * This should ideally have been removed in vput() above.
-	 * We try again here, incase it is missed from vput(), as
-	 * we added this vnode explicitly to virt_node_list above.
-	 */
-	VIRTFS_LOCK(vses);
-	if ((np->flags & VIRTFS_NODE_IN_SESSION) != 0) {
-		np->flags &= ~VIRTFS_NODE_IN_SESSION;
-		STAILQ_REMOVE(&vses->virt_node_list, np, virtfs_node, virtfs_node_next);
-	}
-	VIRTFS_UNLOCK(vses);
 	virtfs_dispose_node(&np);
+
+	if (error_reload) {
+		vput(vp);
+	}
+
 	*vpp = NULLVP;
 	return (error);
 }
