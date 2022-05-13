@@ -356,7 +356,7 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 
 	error = vfs_hash_insert(vp, hash, flags, td, vpp,
 	    virtfs_node_cmp, &fid->qid);
-	if (error != 0 || *vpp != NULL) {
+	if (error != 0) {
 		/*
 		 *  vp is vput already: either v2 from free list vnode
 		 *  found with the hash and is assigned to vpp or v2
@@ -365,12 +365,15 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 		goto out;
 	}
 
-	VIRTFS_LOCK(vses);
-	STAILQ_INSERT_TAIL(&vses->virt_node_list, np, virtfs_node_next);
-	np->flags |= VIRTFS_NODE_IN_SESSION;
-	VIRTFS_UNLOCK(vses);
+	if (*vpp == NULL) {
+		VIRTFS_LOCK(vses);
+		STAILQ_INSERT_TAIL(&vses->virt_node_list, np, virtfs_node_next);
+		np->flags |= VIRTFS_NODE_IN_SESSION;
+		VIRTFS_UNLOCK(vses);
 
-	*vpp = vp;
+		*vpp = vp;
+	}
+
 	return (0);
 out:
 	if (!IS_ROOT(np)) {
