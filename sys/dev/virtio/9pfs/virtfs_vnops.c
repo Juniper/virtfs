@@ -127,12 +127,8 @@ virtfs_cleanup(struct virtfs_node *np)
 	/* Remove all the FID */
 	virtfs_fid_remove_all(np);
 
-	/* Destroy the FID LIST locks */
-	VIRTFS_VFID_LOCK_DESTROY(np);
-	VIRTFS_VOFID_LOCK_DESTROY(np);
-
 	/* Dispose all node knowledge.*/
-	virtfs_dispose_node(&np);
+	virtfs_destroy_node(&np);
 }
 
 /*

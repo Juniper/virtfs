@@ -226,6 +226,30 @@ virtfs_node_cmp(struct vnode *vp, void *arg)
 }
 
 /*
+ * Cleanup virtfs node
+ *  - Destroy the FID LIST locks
+ *  - Dispose all node knowledge
+ */
+void
+virtfs_destroy_node(struct virtfs_node **npp)
+{
+	struct virtfs_node *np;
+
+	np = *npp;
+
+	if (np == NULL)
+		return;
+
+	/* Destroy the FID LIST locks */
+	VIRTFS_VFID_LOCK_DESTROY(np);
+	VIRTFS_VOFID_LOCK_DESTROY(np);
+
+	/* Dispose all node knowledge.*/
+	virtfs_dispose_node(&np);
+}
+
+
+/*
  * Common code used across VirtFS to return vnode for the file represented
  * by the fid.
  * Lookup for the vnode in hash_list. This lookup is based on the qid path
@@ -372,19 +396,22 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 		VIRTFS_UNLOCK(vses);
 
 		*vpp = vp;
+	} else {
+		/*
+		 * Returning matching vp found in hashlist.
+		 * So cleanup the np allocated above in this context.
+		 */
+		if (!IS_ROOT(np)) {
+			virtfs_destroy_node(&np);
+		}
 	}
 
 	return (0);
 out:
-	if (!IS_ROOT(np)) {
-		/* Destroy the FID LIST locks */
-		VIRTFS_VFID_LOCK_DESTROY(np);
-		VIRTFS_VOFID_LOCK_DESTROY(np);
-	}
-
 	/* Something went wrong, dispose the node */
-
-	virtfs_dispose_node(&np);
+	if (!IS_ROOT(np)) {
+		virtfs_destroy_node(&np);
+	}
 
 	if (error_reload) {
 		vput(vp);

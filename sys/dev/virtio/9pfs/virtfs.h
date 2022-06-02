@@ -184,6 +184,7 @@ int virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
     struct virtfs_node *parent, struct p9_fid *fid, struct vnode **vpp,
     char *name);
 int virtfs_node_cmp(struct vnode *vp, void *arg);
+void virtfs_destroy_node(struct virtfs_node **npp);
 void virtfs_dispose_node(struct virtfs_node **npp);
 void virtfs_cleanup(struct virtfs_node *vp);
 void virtfs_fid_remove_all(struct virtfs_node *np);
