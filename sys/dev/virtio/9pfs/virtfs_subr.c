@@ -169,21 +169,10 @@ virtfs_close_session(struct mount *mp)
 {
 	struct virtfs_session *vses;
 	struct virtfs_mount *vmp;
-	struct virtfs_node *p, *tmp;
 
 	vmp = VFSTOP9(mp);
 	vses = &vmp->virtfs_session;
 
-	/*
-	 * Cleanup the leftover VirtFS nodes in this session. This could be all
-	 * removed, unlinked VirtFS nodes on the host.
-	 */
-	VIRTFS_LOCK(vses);
-	STAILQ_FOREACH_SAFE(p, &vses->virt_node_list, virtfs_node_next, tmp) {
-
-		virtfs_cleanup(p);
-	}
-	VIRTFS_UNLOCK(vses);
 	virtfs_complete_close(mp);
 	/* Clean up the clnt structure. */
 	p9_client_destroy(vses->clnt);
