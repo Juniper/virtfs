@@ -105,6 +105,10 @@ virtfs_cleanup(struct virtfs_node *np)
 	vp = VIRTFS_NTOV(np);
 	vses = np->virtfs_ses;
 
+	/* Remove the vnode from hash list if vnode is not already deleted */
+	if ((np->flags & VIRTFS_NODE_DELETED) == 0)
+		vfs_hash_remove(vp);
+
 	VIRTFS_LOCK(vses);
 	if ((np->flags & VIRTFS_NODE_IN_SESSION) != 0) {
 		np->flags &= ~VIRTFS_NODE_IN_SESSION;
@@ -119,10 +123,6 @@ virtfs_cleanup(struct virtfs_node *np)
 	cache_purge(vp);
 	/* Destroy the vm object and flush associated pages. */
 	vnode_destroy_vobject(vp);
-
-	/* Remove the vnode from hash list if vnode is not already deleted */
-	if ((np->flags & VIRTFS_NODE_DELETED) == 0)
-		vfs_hash_remove(vp);
 
 	/* Remove all the FID */
 	virtfs_fid_remove_all(np);
