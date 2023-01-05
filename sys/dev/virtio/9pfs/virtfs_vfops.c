@@ -297,9 +297,13 @@ virtfs_vget_common(struct mount *mp, struct virtfs_node *np, int flags,
 			*vpp = vp;
 			return (0);
 		}
+		/*
+		 * In case the np link list is broken, re-assign the parent of the node
+		 */
+		node = vp->v_data;
+		node->parent = parent;
 		error = virtfs_reload_stats_dotl(vp);
 		if (error != 0) {
-			node = vp->v_data;
 			/* Remove stale vnode from hash list */
 			vfs_hash_remove(vp);
 			node->flags |= VIRTFS_NODE_DELETED;
