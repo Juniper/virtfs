@@ -112,6 +112,32 @@ SYSCTL_UINT(_vfs_9p, OID_AUTO, ackmaxidle, CTLFLAG_RW, &vt9p_ackmaxidle, 0,
     "Maximum time request thread waits for ack from host");
 
 /*
+ * Wait for completion of a p9 request.
+ *
+ * This routine will sleep and release the chan mtx during the period.
+ * chan mtx will be acquired again upon return.
+ */
+static int
+vt9p_req_wait(struct vt9p_softc *chan, struct p9_req_t *req)
+{
+	if (req->tc->tag != req->rc->tag) {
+		if (msleep(req, VT9P_MTX(chan), 0, "chan lock",
+		    vt9p_ackmaxidle * hz)) {
+			/*
+			 * Waited for 120s. No response from host.
+			 * Can't wait for ever..
+			 */
+			p9_debug(ERROR, "Timeout after waiting %u seconds"
+			    "for an ack from host\n", vt9p_ackmaxidle);
+			return (EIO);
+		}
+		KASSERT(req->tc->tag == req->rc->tag,
+		    ("Spurious event on p9 req"));
+	}
+	return (0);
+}
+
+/*
  * Request handler. This is called for every request submitted to the host
  * It basically maps the tc/rc buffers to sg lists and submits the requests
  * into the virtqueue. Since we have implemented a synchronous version, the
@@ -124,7 +150,6 @@ vt9p_request(struct p9_client *client, struct p9_req_t *req)
 {
 	int error;
 	struct vt9p_softc *chan;
-	struct p9_req_t *curreq;
 	int readable, writable;
 	struct sglist *sg;
 	struct virtqueue *vq;
@@ -142,6 +167,7 @@ vt9p_request(struct p9_client *client, struct p9_req_t *req)
 	error = sglist_append(sg, req->tc->sdata, req->tc->size);
 	if (error != 0) {
 		p9_debug(ERROR, "sglist append failed\n");
+		VT9P_UNLOCK(chan);
 		return (error);
 	}
 	readable = sg->sg_nseg;
@@ -149,6 +175,7 @@ vt9p_request(struct p9_client *client, struct p9_req_t *req)
 	error = sglist_append(sg, req->rc->sdata, req->rc->capacity);
 	if (error != 0) {
 		p9_debug(ERROR, " sglist append failed\n");
+		VT9P_UNLOCK(chan);
 		return (error);
 	}
 	writable = sg->sg_nseg - readable;
@@ -167,34 +194,18 @@ req_retry:
 			goto req_retry;
 		} else {
 			p9_debug(ERROR, "virtio enuqueue failed \n");
+			VT9P_UNLOCK(chan);
 			return (EIO);
 		}
 	}
 
 	/* We have to notify */
 	virtqueue_notify(vq);
-
-	do {
-		curreq = virtqueue_dequeue(vq, NULL);
-		if (curreq == NULL) {
-			/* Nothing to dequeue, sleep until we have something */
-			if (msleep(chan, VT9P_MTX(chan), 0, "chan lock",
-			    vt9p_ackmaxidle * hz)) {
-				/*
-				 * Waited for 120s. No response from host.
-				 * Can't wait for ever..
-				 */
-				p9_debug(ERROR, "Timeout after waiting %u seconds"
-				    "for an ack from host\n", vt9p_ackmaxidle);
-				VT9P_UNLOCK(chan);
-				return (EIO);
-			}
-		} else {
-		        cv_signal(&chan->submit_cv);
-			/* We dequeued something, update the reply tag */
-			curreq->rc->tag = curreq->tc->tag;
-		}
-	} while (req->rc->tag == P9_NOTAG);
+	error = vt9p_req_wait(chan, req);
+	if (error != 0) {
+		VT9P_UNLOCK(chan);
+		return (error);
+	}
 
 	VT9P_UNLOCK(chan);
 
@@ -206,13 +217,14 @@ req_retry:
 /*
  * Completion of the request from the virtqueue. This interrupt handler is
  * setup at initialization and is called for every completing request. It
- * just wakes up the sleeping submission thread.
+ * just wakes up the sleeping submission requests.
  */
 static void
 vt9p_intr_complete(void *xsc)
 {
 	struct vt9p_softc *chan;
 	struct virtqueue *vq;
+	struct p9_req_t *curreq;
 
 	chan = (struct vt9p_softc *)xsc;
 	vq = chan->vt9p_vq;
@@ -220,8 +232,12 @@ vt9p_intr_complete(void *xsc)
 	p9_debug(TRANS, "Completing interrupt \n");
 
 	VT9P_LOCK(chan);
+	while ((curreq = virtqueue_dequeue(vq, NULL)) != NULL) {
+		curreq->rc->tag = curreq->tc->tag;
+		wakeup_one(curreq);
+	}
 	virtqueue_enable_intr(vq);
-	wakeup(chan);
+	cv_signal(&chan->submit_cv);
 	VT9P_UNLOCK(chan);
 }
 
