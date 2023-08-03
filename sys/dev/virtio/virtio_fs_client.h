@@ -70,6 +70,10 @@ enum transport_status {
 /* This is set by QEMU so we will oblige */
 #define VIRTFS_MTU 8192
 
+/* File type */
+#define VIRTFS_DIR	1
+#define VIRTFS_FILE	2
+
 /*
  * Even though we have a 8k buffer, Qemu is typically doing 8168
  * because of a HDR of 24. Use that amount for transfers so that we dont
@@ -133,8 +137,7 @@ uint16_t p9_tag_create(struct p9_client *clnt);
 void p9_tag_destroy(struct p9_client *clnt, uint16_t tag);
 int p9_client_clunk(struct p9_fid *fid);
 int p9_client_version(struct p9_client *clnt);
-int p9_client_readdir(struct p9_fid *fid, char *data, uint64_t offset, uint32_t count);
-int p9_client_read(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data);
+int p9_client_read(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data, int type);
 int p9_client_write(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data);
 int p9_client_file_create(struct p9_fid *fid, char *name, uint32_t perm, int mode,
     char *extension);

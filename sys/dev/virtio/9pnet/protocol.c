@@ -552,9 +552,10 @@ p9stat_read(struct p9_client *clnt, char *buf, size_t len, struct p9_wstat *st)
 	ret = p9_buf_readf(&msg_buf, clnt->proto_version, "S", st);
 	if (ret) {
 		p9_debug(ERROR, "p9stat_read failed: %d\n", ret);
+		return -ret;
 	}
 
-	return ret;
+	return msg_buf.offset;
 }
 
 /*

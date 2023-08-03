@@ -832,54 +832,6 @@ out:
 	return (error);
 }
 
-/* Request to get directory entries */
-int
-p9_client_readdir(struct p9_fid *fid, char *data, uint64_t offset,
-    uint32_t count)
-{
-	int error;
-	uint32_t rsize;
-	struct p9_client *clnt;
-	struct p9_req_t *req;
-	char *dataptr;
-
-	p9_debug(TRANS, "TREADDIR fid %d offset %llu count %d\n",
-	    fid->fid, (unsigned long long) offset, count);
-
-	error = 0;
-	rsize = fid->mtu;
-	clnt = fid->clnt;
-
-	if (!rsize || rsize > clnt->msize)
-		rsize = clnt->msize;
-
-	if (count < rsize)
-		rsize = count;
-
-	req = p9_client_request(clnt, P9PROTO_TREADDIR, &error, "dqd",
-	    fid->fid, offset, rsize);
-
-	if (error != 0) {
-		p9_debug(ERROR, "Couldn't allocate req in client_readdir\n");
-		return (-error);
-	}
-
-	error = p9_buf_readf(req->rc, clnt->proto_version, "D", &count,
-	    &dataptr);
-	if (error != 0) {
-		p9_debug(ERROR, "buf_readf error in client_readdir \n");
-		p9_free_req(clnt, req);
-		return (-error);
-	}
-
-	p9_debug(TRANS, "RREADDIR count %u\n", count);
-
-	/* Copy back the data into the input buffer. */
-	memmove(data, dataptr, count);
-	p9_free_req(clnt, req);
-	return (count);
-}
-
 /*
  * Read count bytes from offset for the file fid into the character
  * buffer data. This buffer is handed over to VirtFS to process into user
@@ -888,7 +840,7 @@ p9_client_readdir(struct p9_fid *fid, char *data, uint64_t offset,
  * error codes and bytes.
  */
 int
-p9_client_read(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data)
+p9_client_read(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data, int type)
 {
 	struct p9_client *clnt;
 	struct p9_req_t *req;
@@ -912,7 +864,7 @@ p9_client_read(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data)
 	req = p9_client_request(clnt, P9PROTO_TREAD, &error, "dqd", fid->fid,
 	    offset, rsize);
 	if (error != 0) {
-		p9_debug(ERROR, "Coudlnt allocate request in client_read \n");
+		p9_debug(ERROR, "Could not allocate request in client_read \n");
 		return (-error);
 	}
 
@@ -930,7 +882,7 @@ p9_client_read(struct p9_fid *fid, uint64_t offset, uint32_t count, char *data)
 
 	p9_debug(TRANS, "RREAD count %d\n", count);
 
-	if (count == 0) {
+	if (type == VIRTFS_FILE && count == 0) {
 		error = -EIO;
 		p9_debug(ERROR, "EIO error in client_read \n");
 		goto out;

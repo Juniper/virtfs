@@ -1320,7 +1320,7 @@ virtfs_read(struct vop_read_args *ap)
 			break;
 
 		/* Copy count bytes into the uio */
-		ret = p9_client_read(vofid, offset, count, io_buffer);
+		ret = p9_client_read(vofid, offset, count, io_buffer, VIRTFS_FILE);
 		/*
 		 * This is the only place in the entire VirtFS where we check the error
 		 * for < 0 as p9_client_read/write return the number of bytes instead of
@@ -1704,12 +1704,13 @@ virtfs_readdir(struct vop_readdir_args *ap)
 	struct vnode *vp;
 	struct dirent cde;
 	int64_t offset;
+	int64_t roffset;
 	uint64_t diroffset;
 	struct virtfs_node *np;
 	int error;
 	int32_t count;
 	struct p9_client *clnt;
-	struct p9_dirent dent;
+	struct p9_wstat st;
 	char *io_buffer;
 	struct p9_fid *vofid;
 
@@ -1717,6 +1718,7 @@ virtfs_readdir(struct vop_readdir_args *ap)
 	vp = ap->a_vp;
 	np = VIRTFS_VTON(ap->a_vp);
 	offset = 0;
+	roffset = 0;
 	diroffset = 0;
 	error = 0;
 	count = 0;
@@ -1750,8 +1752,7 @@ virtfs_readdir(struct vop_readdir_args *ap)
 		 */
 		count = VIRTFS_IOUNIT;
 		bzero(io_buffer, VIRTFS_MTU);
-		count = p9_client_readdir(vofid, (char *)io_buffer,
-			diroffset, count);
+		count = p9_client_read(vofid, diroffset, count, io_buffer, VIRTFS_DIR);
 
 		if (count == 0)
 			break;
@@ -1769,19 +1770,22 @@ virtfs_readdir(struct vop_readdir_args *ap)
 			 * This is part of 9p protocol read. This reads one p9_dirent,
 			 * appends it to dirent(FREEBSD specifc) and continues to parse the buffer.
 			 */
-			bzero(&dent, sizeof(dent));
-			offset = p9_dirent_read(clnt, io_buffer, offset, count,
-				&dent);
-			if (offset < 0 || offset > count) {
+			bzero(&st, sizeof(st));
+			roffset = p9stat_read(clnt, io_buffer + offset, count - offset,
+			    &st);
+
+			if (roffset <= 0 ) {
 				error = EIO;
 				goto out;
 			}
 
+			offset += roffset;
+
 			bzero(&cde, sizeof(cde));
-			strncpy(cde.d_name, dent.d_name, dent.len);
-			cde.d_fileno = dent.qid.path;
-			cde.d_type = dent.d_type;
-			cde.d_namlen = dent.len;
+			strlcpy(cde.d_name, st.name, sizeof(cde.d_name));
+			cde.d_fileno = st.qid.path;
+			cde.d_type = st.type;
+			cde.d_namlen = strlen(st.name);
 			cde.d_reclen = GENERIC_DIRSIZ(&cde);
 
                         /*
@@ -1797,7 +1801,7 @@ virtfs_readdir(struct vop_readdir_args *ap)
 				error = EIO;
 				goto out;
 			}
-			diroffset = dent.d_off;
+			diroffset = offset;
 		}
 	}
 	/* Pass on last transferred offset */
@@ -1883,7 +1887,7 @@ virtfs_strategy(struct vop_strategy_args *ap)
 				    uiov->uio_resid, (uintmax_t)uiov->uio_offset);
 
 				/* Copy count bytes into the uio */
-				ret = p9_client_read(vofid, offset, count, io_buffer);
+				ret = p9_client_read(vofid, offset, count, io_buffer, VIRTFS_FILE);
 				error = uiomove(io_buffer, ret, uiov);
 
 				if (error != 0)
